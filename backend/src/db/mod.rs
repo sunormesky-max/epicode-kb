@@ -68,6 +68,7 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         ("001_init", schema::MIGRATION_001_INIT),
         ("002_indexes", schema::MIGRATION_002_INDEXES),
         ("003_v2_schema", schema::MIGRATION_003_V2_SCHEMA),
+        ("004_v3_schema", schema::MIGRATION_004_V3_SCHEMA),
     ];
 
     for (name, sql) in migrations {

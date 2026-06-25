@@ -73,7 +73,12 @@ prometheus = "0.13"
 
 # Cryptography / API keys
 sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
 base64 = "0.22"
+
+# HTTP client for webhooks
+ureq = "2.10"
 
 [features]
 default = []

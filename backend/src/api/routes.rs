@@ -98,8 +98,12 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/mcp/sse/session/:session_id",
             post(crate::api::mcp::mcp_sse_message),
         )
-        // Proposal routes (stub)
+        // Proposal routes
         .route("/proposals", get(crate::api::proposal::list_proposals))
+        .route(
+            "/proposals/batch",
+            post(crate::api::proposal::batch_proposals),
+        )
         .route(
             "/proposals/:id/approve",
             post(crate::api::proposal::approve_proposal),
@@ -112,12 +116,19 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/proposals/:id/modify",
             post(crate::api::proposal::modify_proposal),
         )
+        // Dream cycle trigger
+        .route("/dream/scan", post(crate::api::proposal::scan_proposals))
         // Health routes
         .route("/health/live", get(crate::api::health::live))
         .route("/health/ready", get(crate::api::health::ready))
         .route("/health/space/:id", get(crate::api::health::space_health))
         .route("/health/gaps", get(crate::api::health::knowledge_gaps))
         .route("/health/scan", post(crate::api::health::scan))
+        // Health v3 routes
+        .route("/v3/health/space/:id", get(crate::api::health_api::get_space_health))
+        .route("/v3/health/gaps", get(crate::api::health_api::get_gaps))
+        .route("/v3/health/stale", get(crate::api::health_api::get_stale))
+        .route("/v3/health/scan", post(crate::api::health_api::trigger_scan))
         // Conflict routes (stub)
         .route("/conflicts", get(crate::api::proposal::list_conflicts))
         .route(
@@ -126,11 +137,6 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         // Graph route (stub)
         .route("/graph", get(crate::api::health::graph))
-        // Notification routes (stub)
-        .route(
-            "/notifications",
-            get(crate::api::proposal::list_notifications),
-        )
         // Metrics route
         .route("/metrics", get(crate::api::health::metrics))
         // System routes

@@ -48,6 +48,11 @@ pub struct AppConfig {
     pub chunk_size: usize,
     /// Default chunk overlap for document parsing.
     pub chunk_overlap: usize,
+
+    /// Conflict detection: semantic distance threshold.
+    pub conflict_threshold: Option<f32>,
+    /// Conflict detection: LLM confidence threshold.
+    pub conflict_llm_confidence: Option<f32>,
 }
 
 impl AppConfig {
@@ -106,6 +111,12 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(64),
+            conflict_threshold: std::env::var("EPICODE_KB_CONFLICT_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            conflict_llm_confidence: std::env::var("EPICODE_KB_CONFLICT_LLM_CONFIDENCE")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         }
     }
 
@@ -137,6 +148,8 @@ impl Default for AppConfig {
             oidc_client_secret: None,
             chunk_size: 512,
             chunk_overlap: 64,
+            conflict_threshold: None,
+            conflict_llm_confidence: None,
         }
     }
 }

@@ -104,6 +104,11 @@ impl AppError {
     pub fn password_hash(msg: impl Into<String>) -> Self {
         AppError::PasswordHash(msg.into())
     }
+
+    /// Create a database error from rusqlite.
+    pub fn db(e: rusqlite::Error) -> Self {
+        AppError::Database(e)
+    }
 }
 
 /// Error code mapping.

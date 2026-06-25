@@ -993,6 +993,31 @@ impl QueryLogRepo {
         )?;
         Ok(())
     }
+
+    pub fn insert_simple(conn: &Connection, space_id: &str, user_id: Option<&str>, query: &str, result_count: i64, query_type: &str) -> AppResult<()> {
+        let id = format!("ql_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
+        let now = crate::now_ts();
+        conn.execute(
+            "INSERT INTO query_logs (id, space_id, user_id, query, result_count, query_type, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, space_id, user_id, query, result_count, query_type, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_zero_result_queries(conn: &Connection, space_id: &str, since_days: i64) -> AppResult<Vec<(String, i64)>> {
+        let cutoff = crate::now_ts() - since_days * 86400;
+        let mut stmt = conn.prepare(
+            "SELECT query, COUNT(*) as cnt FROM query_logs WHERE space_id = ?1 AND result_count = 0 AND created_at > ?2 GROUP BY query ORDER BY cnt DESC LIMIT 20",
+        )?;
+        let rows = stmt.query_map(params![space_id, cutoff], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
+        }
+        Ok(result)
+    }
 }
 
 // ============================================================
@@ -1003,51 +1028,212 @@ impl QueryLogRepo {
 pub struct ProposalRepo;
 
 impl ProposalRepo {
-    /// List proposals by space and status.
+    pub fn insert(conn: &Connection, proposal: &crate::dream::proposal::AiProposal) -> AppResult<()> {
+        let source_ids = serde_json::to_string(&proposal.source_memory_ids).unwrap_or_default();
+        let proposed_action = proposal.proposed_action.as_ref().map(|v| v.to_string());
+        conn.execute(
+            "INSERT INTO ai_proposals (id, space_id, proposal_type, source_memory_ids, proposed_content, proposed_action, ai_model, confidence, status, reviewer_id, reviewed_at, review_feedback, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                proposal.id,
+                proposal.space_id,
+                serde_json::to_string(&proposal.proposal_type).unwrap_or_default().trim_matches('"'),
+                source_ids,
+                proposal.proposed_content,
+                proposed_action,
+                proposal.ai_model,
+                proposal.confidence,
+                "pending",
+                proposal.reviewer_id,
+                proposal.reviewed_at,
+                proposal.review_feedback,
+                proposal.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn list(
-        _conn: &Connection,
-        _space_id: &str,
-        _status: Option<&str>,
-    ) -> AppResult<Vec<serde_json::Value>> {
-        Err(AppError::not_implemented(
-            "proposal listing (planned for Sprint 3)",
-        ))
+        conn: &Connection,
+        space_id: &str,
+        status: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> AppResult<Vec<crate::dream::proposal::AiProposal>> {
+        let sql = if let Some(s) = status {
+            format!(
+                "SELECT id, space_id, proposal_type, source_memory_ids, proposed_content, proposed_action, ai_model, confidence, status, reviewer_id, reviewed_at, review_feedback, created_at
+                 FROM ai_proposals WHERE space_id = ?1 AND status = ?2 ORDER BY created_at DESC LIMIT ?3 OFFSET ?4"
+            )
+        } else {
+            format!(
+                "SELECT id, space_id, proposal_type, source_memory_ids, proposed_content, proposed_action, ai_model, confidence, status, reviewer_id, reviewed_at, review_feedback, created_at
+                 FROM ai_proposals WHERE space_id = ?1 ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
+            )
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let rows: Vec<_> = if let Some(s) = status {
+            stmt.query_map(params![space_id, s, limit, offset], row_to_proposal)?
+                .collect()
+        } else {
+            stmt.query_map(params![space_id, limit, offset], row_to_proposal)?
+                .collect()
+        };
+        let mut proposals = Vec::new();
+        for r in rows {
+            proposals.push(r?);
+        }
+        Ok(proposals)
     }
 
-    /// Insert a new proposal.
-    pub fn insert(_conn: &Connection, _proposal: &serde_json::Value) -> AppResult<()> {
-        Err(AppError::not_implemented(
-            "proposal creation (planned for Sprint 3)",
-        ))
+    pub fn get_by_id(conn: &Connection, id: &str) -> AppResult<crate::dream::proposal::AiProposal> {
+        conn.query_row(
+            "SELECT id, space_id, proposal_type, source_memory_ids, proposed_content, proposed_action, ai_model, confidence, status, reviewer_id, reviewed_at, review_feedback, created_at
+             FROM ai_proposals WHERE id = ?1",
+            params![id],
+            row_to_proposal,
+        )
+        .map_err(|e| {
+            if e == rusqlite::Error::QueryReturnedNoRows {
+                AppError::not_found("proposal")
+            } else {
+                AppError::db(e)
+            }
+        })
     }
 
-    /// Update proposal status.
-    pub fn update_status(_conn: &Connection, _id: &str, _status: &str) -> AppResult<()> {
-        Err(AppError::not_implemented(
-            "proposal status update (planned for Sprint 3)",
-        ))
+    pub fn update_status(
+        conn: &Connection,
+        id: &str,
+        status: &str,
+        reviewer_id: &str,
+        feedback: Option<&str>,
+    ) -> AppResult<()> {
+        let now = crate::now_ts();
+        conn.execute(
+            "UPDATE ai_proposals SET status = ?1, reviewer_id = ?2, reviewed_at = ?3, review_feedback = ?4 WHERE id = ?5",
+            params![status, reviewer_id, now, feedback, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn count_by_type(conn: &Connection, space_id: &str, proposal_type: &str, status: &str) -> AppResult<i64> {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM ai_proposals WHERE space_id = ?1 AND proposal_type = ?2 AND status = ?3",
+            params![space_id, proposal_type, status],
+            |row| row.get(0),
+        )?;
+        Ok(count)
     }
 }
 
+fn row_to_proposal(row: &rusqlite::Row) -> rusqlite::Result<crate::dream::proposal::AiProposal> {
+    use crate::dream::proposal::{ProposalStatus, ProposalType};
+    let type_str: String = row.get(2)?;
+    let proposal_type: ProposalType = serde_json::from_str(&format!("\"{}\"", type_str)).unwrap_or(ProposalType::Merge);
+    let status_str: String = row.get(8)?;
+    let status: ProposalStatus = serde_json::from_str(&format!("\"{}\"", status_str)).unwrap_or(ProposalStatus::Pending);
+    let source_ids_str: String = row.get(3)?;
+    let source_memory_ids: Vec<String> = serde_json::from_str(&source_ids_str).unwrap_or_default();
+    let action_str: Option<String> = row.get(5)?;
+    let proposed_action = action_str.and_then(|s| serde_json::from_str(&s).ok());
+    Ok(crate::dream::proposal::AiProposal {
+        id: row.get(0)?,
+        space_id: row.get(1)?,
+        proposal_type,
+        source_memory_ids,
+        proposed_content: row.get(4)?,
+        proposed_action,
+        ai_model: row.get(6)?,
+        confidence: row.get(7)?,
+        status,
+        reviewer_id: row.get(9)?,
+        reviewed_at: row.get(10)?,
+        review_feedback: row.get(11)?,
+        created_at: row.get(12)?,
+    })
+}
+
 // ============================================================
-// Notification Repository (stub — Sprint 3)
+// Health Repository
 // ============================================================
 
-/// Repository for notifications.
-pub struct NotificationRepo;
+/// Repository for knowledge health snapshots.
+pub struct HealthRepo;
 
-impl NotificationRepo {
-    /// List notifications for a user.
-    pub fn list_by_user(_conn: &Connection, _user_id: &str) -> AppResult<Vec<serde_json::Value>> {
-        Err(AppError::not_implemented(
-            "notification listing (planned for Sprint 3)",
-        ))
+impl HealthRepo {
+    pub fn insert_snapshot(conn: &Connection, snap: &crate::health::scanner::HealthSnapshot) -> AppResult<()> {
+        let id = format!("hs_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
+        let now = crate::now_ts();
+        conn.execute(
+            "INSERT INTO knowledge_health (id, space_id, snapshot_date, total_memories, human_ratio, ai_ratio, co_ratio, conflict_count, avg_trust, stale_count, orphan_count, gap_count, health_score, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                id, snap.space_id, snap.snapshot_date,
+                snap.total as i64, snap.human_ratio, snap.ai_ratio, snap.co_ratio,
+                snap.conflict_count as i64, snap.avg_trust,
+                snap.stale_count as i64, snap.orphan_count as i64, snap.gap_count as i64,
+                snap.health_score, now,
+            ],
+        )?;
+        Ok(())
     }
 
-    /// Create a notification.
-    pub fn create(_conn: &Connection, _notif: &serde_json::Value) -> AppResult<()> {
-        Err(AppError::not_implemented(
-            "notification creation (planned for Sprint 3)",
-        ))
+    pub fn get_latest(conn: &Connection, space_id: &str) -> AppResult<Option<crate::health::scanner::HealthSnapshot>> {
+        let result = conn.query_row(
+            "SELECT space_id, snapshot_date, total_memories, human_ratio, ai_ratio, co_ratio, conflict_count, avg_trust, stale_count, orphan_count, gap_count, health_score
+             FROM knowledge_health WHERE space_id = ?1 ORDER BY snapshot_date DESC LIMIT 1",
+            params![space_id],
+            |row| {
+                Ok(crate::health::scanner::HealthSnapshot {
+                    space_id: row.get(0)?,
+                    snapshot_date: row.get(1)?,
+                    total: row.get::<_, i64>(2)? as usize,
+                    human_ratio: row.get(3)?,
+                    ai_ratio: row.get(4)?,
+                    co_ratio: row.get(5)?,
+                    conflict_count: row.get::<_, i64>(6)? as usize,
+                    avg_trust: row.get(7)?,
+                    stale_count: row.get::<_, i64>(8)? as usize,
+                    orphan_count: row.get::<_, i64>(9)? as usize,
+                    gap_count: row.get::<_, i64>(10)? as usize,
+                    health_score: row.get(11)?,
+                })
+            },
+        );
+        match result {
+            Ok(snap) => Ok(Some(snap)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(AppError::db(e)),
+        }
+    }
+}
+
+/// Repository for notification subscriptions.
+pub struct NotifySubRepo;
+
+impl NotifySubRepo {
+    pub fn list_active(conn: &Connection, space_id: &str, event_type: &str) -> AppResult<Vec<(String, String, String)>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, webhook_url, webhook_secret FROM notify_subscriptions WHERE space_id = ?1 AND event_type = ?2 AND is_active = 1",
+        )?;
+        let rows = stmt.query_map(params![space_id, event_type], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })?;
+        let mut result = Vec::new();
+        for r in rows {
+            result.push(r?);
+        }
+        Ok(result)
+    }
+
+    pub fn subscribe(conn: &Connection, space_id: &str, event_type: &str, webhook_url: &str, webhook_secret: &str) -> AppResult<String> {
+        let id = format!("sub_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
+        let now = crate::now_ts();
+        conn.execute(
+            "INSERT INTO notify_subscriptions (id, space_id, event_type, webhook_url, webhook_secret, is_active, created_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)",
+            params![id, space_id, event_type, webhook_url, webhook_secret, now],
+        )?;
+        Ok(id)
     }
 }

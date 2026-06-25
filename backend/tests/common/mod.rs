@@ -31,6 +31,8 @@ pub async fn create_test_app() -> (Router, Arc<AppState>, PathBuf) {
         oidc_client_secret: None,
         chunk_size: 64,
         chunk_overlap: 8,
+        conflict_threshold: None,
+        conflict_llm_confidence: None,
     };
 
     let state = AppState::new(Arc::new(config)).await.unwrap();

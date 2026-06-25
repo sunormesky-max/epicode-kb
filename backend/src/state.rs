@@ -8,9 +8,14 @@ use tantivy::{Index, IndexWriter};
 use crate::auth::service::AuthService;
 use crate::collab::room::RoomManager;
 use crate::config::AppConfig;
+use crate::conflict::detect::ConflictDetector;
+use crate::conflict::model::ConflictConfig;
 use crate::db;
+use crate::dream::proposal::ProposalEngine;
 use crate::embed::{self, EmbeddingProvider};
 use crate::error::AppResult;
+use crate::health::scanner::HealthScanner;
+use crate::notify::subscriptions::SubscriptionManager;
 use crate::observability::metrics::Metrics;
 use crate::search::fulltext::{self, TantivySchema};
 use crate::search::hybrid::HybridSearcher;
@@ -39,6 +44,14 @@ pub struct AppState {
     pub room_manager: Arc<RoomManager>,
     /// Prometheus metrics.
     pub metrics: Arc<Metrics>,
+    /// AI proposal engine.
+    pub proposal_engine: Arc<ProposalEngine>,
+    /// Conflict detector (optional, requires embedding).
+    pub conflict_detector: Option<Arc<ConflictDetector>>,
+    /// Health scanner.
+    pub health_scanner: Option<Arc<HealthScanner>>,
+    /// Notification subscription manager.
+    pub subscription_manager: Arc<SubscriptionManager>,
 }
 
 impl AppState {
@@ -85,6 +98,29 @@ impl AppState {
         // Initialize metrics
         let metrics = Arc::new(Metrics::new());
 
+        // Initialize proposal engine
+        let proposal_engine = Arc::new(ProposalEngine::new(db_pool.clone()));
+
+        // Initialize conflict detector
+        let conflict_detector = {
+            let cc = ConflictConfig {
+                semantic_threshold: config.conflict_threshold.unwrap_or(0.3),
+                llm_confidence_threshold: config.conflict_llm_confidence.unwrap_or(0.6),
+                max_neighbors: 10,
+            };
+            Some(Arc::new(ConflictDetector::new(
+                db_pool.clone(),
+                embedder.clone(),
+                cc,
+            )))
+        };
+
+        // Initialize health scanner
+        let health_scanner = Some(Arc::new(HealthScanner::new(db_pool.clone())));
+
+        // Initialize subscription manager
+        let subscription_manager = Arc::new(SubscriptionManager::new(db_pool.clone()));
+
         Ok(Self {
             config,
             db: db_pool,
@@ -96,6 +132,10 @@ impl AppState {
             auth_service,
             room_manager,
             metrics,
+            proposal_engine,
+            conflict_detector,
+            health_scanner,
+            subscription_manager,
         })
     }
 }
