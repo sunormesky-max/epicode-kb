@@ -1,0 +1,140 @@
+%% epicode-kb 序列图
+%% 文档上传 → 解析 → 分块 → Embedding → 写入记忆
+
+sequenceDiagram
+    autonumber
+    actor User as 用户
+    participant FE as 前端 (Upload.tsx)
+    participant API as API (upload.rs)
+    participant Parser as DocumentParser
+    participant MemSvc as MemoryService
+    participant Embed as EmbeddingProvider
+    participant Repo as Repository
+    participant DB as SQLite
+    participant TI as Tantivy Index
+
+    User->>FE: 拖拽文件到上传区
+    FE->>FE: 校验文件类型 (md/txt/pdf)
+    FE->>API: POST /api/v1/upload (multipart)
+    API->>API: 解析 multipart 提取 file + space_id
+
+    alt 文件类型不支持
+        API-->>FE: 400 {code: 40001, message: "unsupported file type"}
+        FE-->>User: 显示错误提示
+    end
+
+    API->>Parser: parse(file_bytes)
+    
+    alt Markdown
+        Parser->>Parser: MarkdownParser::parse()
+        Parser-->>API: Vec<MemoryChunk> (按标题+段落分块)
+    else Text
+        Parser->>Parser: TextParser::parse()
+        Parser-->>API: Vec<MemoryChunk> (按段落分块, ~512 chars)
+    else PDF
+        Parser->>Parser: PdfParser::parse() (pdf-extract)
+        Parser-->>API: Vec<MemoryChunk>
+    end
+
+    loop 每个 chunk
+        API->>MemSvc: create(CreateMemoryRequest { content, provenance=human })
+        MemSvc->>MemSvc: 构建 Memory struct<br/>provenance=Human, trust=1.0, review=Accepted
+        MemSvc->>Embed: embed(chunk.content)
+        Embed->>Embed: ONNX tokenize + inference
+        Embed-->>MemSvc: Vec<f32> (384维)
+        MemSvc->>Repo: insert_memory(memory)
+        Repo->>DB: INSERT INTO memories (... embedding=BLOB)
+        DB-->>Repo: OK
+        MemSvc->>TI: add_document(memory.id, content, space_id)
+        TI-->>MemSvc: OK
+    end
+
+    MemSvc-->>API: Vec<Memory> (已写入的记忆列表)
+    API-->>FE: 200 {code:0, data:{memories_created, total_chunks, time_ms}}
+    FE-->>User: 显示上传成功 + 记忆卡片列表
+
+%% ============================================================
+
+sequenceDiagram
+    autonumber
+    actor User as 用户
+    participant FE as 前端 (Search.tsx)
+    participant API as API (search.rs)
+    participant Search as HybridSearcher
+    participant Sem as SemanticSearcher
+    participant FT as FulltextSearcher
+    participant Embed as EmbeddingProvider
+    participant Repo as Repository
+    participant DB as SQLite
+    participant TI as Tantivy Index
+    participant QLog as QueryLogger
+
+    User->>FE: 输入搜索词 + 设置过滤器
+    Note over FE: min_trust=0.5, provenance=human,co
+    FE->>API: GET /api/v1/search?q=...&mode=hybrid&min_trust=0.5
+    API->>API: 解析参数，构建 SearchQuery
+    API->>Search: search(query)
+
+    par 并行检索
+        Search->>Embed: embed(query.q)
+        Embed-->>Search: query_vector (384维)
+        Search->>Sem: semantic_search(query_vector, space_id)
+        Sem->>Repo: load_all_embeddings(space_id)
+        Repo->>DB: SELECT id, embedding, trust_level FROM memories WHERE space_id=? AND review_status='accepted'
+        DB-->>Repo: rows
+        Sem->>Sem: 计算余弦相似度 + trust 加权
+        Sem-->>Search: Vec<(memory_id, semantic_score)> top-K
+    and
+        Search->>FT: fulltext_search(query.q, space_id)
+        FT->>TI: searcher.search(query_parser, top-K)
+        TI-->>FT: Vec<(doc_address, score)>
+        FT->>Repo: get_memories_by_ids(ids)
+        Repo->>DB: SELECT * FROM memories WHERE id IN (...)
+        DB-->>Repo: rows
+        FT-->>Search: Vec<(memory, fulltext_score)>
+    end
+
+    Search->>Search: merge_results(semantic, fulltext)
+    Note over Search: 1. RRF 融合两路排名<br/>2. 乘以 trust_weight<br/>3. 应用 min_trust / provenance 过滤<br/>4. 按 score 降序排序
+    Search->>Repo: update_access_count(result_memory_ids)
+    Repo->>DB: UPDATE memories SET access_count+=1, last_accessed_at=now WHERE id IN (...)
+    
+    Search->>QLog: log_query(space_id, query, result_count)
+    QLog->>DB: INSERT INTO query_logs (...)
+
+    Search-->>API: SearchResponse { results, total, time_ms }
+    API-->>FE: 200 {code:0, data:SearchResponse}
+    FE->>FE: 渲染结果列表<br/>每条显示 MemoryCard(来源标签+信任指示器+高亮)
+    FE-->>User: 展示检索结果
+
+%% ============================================================
+
+sequenceDiagram
+    autonumber
+    actor AI as AI Engine
+    actor Mgr as 团队管理者
+    participant API as API (proposal.rs)
+    participant Dream as ProposalEngine
+    participant LLM as LLMProvider
+    participant Repo as Repository
+    participant Notify as Notifier
+
+    Note over AI,Dream: 后台 Dream Cycle 定期触发
+    AI->>Dream: scan_space(space_id)
+    Dream->>Repo: load_memories(space_id)
+    Dream->>Dream: 检测重复/聚类/矛盾
+    Dream->>LLM: complete("根据以下记忆生成合并提议...")
+    LLM-->>Dream: proposed_content
+    Dream->>Repo: insert_proposal(proposal)
+    Dream->>Notify: send(proposal_created)
+    Notify-->>Mgr: 站内通知 + Webhook
+
+    Mgr->>API: GET /api/v1/proposals?status=pending
+    API-->>Mgr: 提议列表
+    Mgr->>API: POST /api/v1/proposals/:id/approve
+    API->>Dream: approve(id, reviewer_id)
+    Dream->>Repo: update_proposal_status(approved)
+    Dream->>Repo: execute_proposal_action(proposal)
+    Note over Dream,Repo: 合并记忆 / 创建关系 / 归档
+    Dream-->>API: 执行结果
+    API-->>Mgr: 200 OK

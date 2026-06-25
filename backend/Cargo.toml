@@ -1,0 +1,66 @@
+[package]
+name = "epicode-kb"
+version = "0.1.0"
+edition = "2021"
+description = "epicode-kb: Enterprise knowledge base with memory provenance, hybrid search, and AI proposal engine"
+license = "MIT"
+
+[lib]
+name = "epicode_kb"
+path = "src/lib.rs"
+
+[[bin]]
+name = "epicode-kb"
+path = "src/main.rs"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["multipart", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Full-text search
+tantivy = "0.22"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP client (LLM calls)
+reqwest = { version = "0.12", features = ["json"] }
+
+# Utilities
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+async-trait = "0.1"
+
+# Document parsing
+pulldown-cmark = "0.11"
+
+# Configuration
+dotenvy = "0.15"
+
+# NOTE: The following crates are intentionally omitted for build portability.
+# They are required for full functionality but can be difficult to compile
+# in all environments. See embed/onnx.rs and parse/pdf.rs for TODO markers.
+# - ort (ONNX Runtime) — for real embedding inference. Add with:
+#     ort = { version = "2.0.0-rc.10", features = ["download-binaries"] }
+# - tokenizers — for ONNX model tokenization
+# - ndarray — for ONNX tensor operations
+# - pdf-extract — for PDF text extraction. Add with:
+#     pdf-extract = "0.7"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

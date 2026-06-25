@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --provenance-human: #22c55e;
+  --provenance-ai: #a855f7;
+  --provenance-co: #14b8a6;
+  --provenance-conflict: #ef4444;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  background-color: #f8fafc;
+  color: #1e293b;
+}
+
+/* Highlight style for search results */
+em {
+  background-color: #fef08a;
+  font-style: normal;
+  padding: 0 2px;
+  border-radius: 2px;
+}

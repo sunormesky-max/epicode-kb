@@ -1,0 +1,266 @@
+%% epicode-kb 类图
+
+classDiagram
+    class Provenance {
+        <<enum>>
+        Human
+        Ai
+        Co
+        Conflict
+        +default_trust() f32
+        +default_review_status() ReviewStatus
+        +as_str() ~str
+        +from_str(s: ~str) Provenance
+    }
+
+    class TrustLevel {
+        <<newtype>>
+        -value: f32
+        +new(value: f32) Result~TrustLevel~
+        +value() f32
+        +adjust(delta: f32) TrustLevel
+    }
+
+    class ReviewStatus {
+        <<enum>>
+        Pending
+        Accepted
+        Rejected
+        Expired
+        +as_str() ~str
+        +is_active() bool
+    }
+
+    class Memory {
+        +id: String
+        +space_id: String
+        +content: String
+        +embedding: Option~Vec~f32~~
+        +embedding_model: String
+        +provenance: Provenance
+        +provenance_meta: Option~serde_json::Value~
+        +trust_level: TrustLevel
+        +review_status: ReviewStatus
+        +parent_conflict_id: Option~String~
+        +last_accessed_at: Option~i64~
+        +access_count: i64
+        +created_at: i64
+        +updated_at: i64
+    }
+
+    class MemoryService {
+        -repo: MemoryRepo
+        -embedder: Arc~dyn EmbeddingProvider~
+        -index: Arc~TantivyIndex~
+        +create(req: CreateMemoryRequest) Result~Memory~
+        +get_by_id(id: ~str) Result~Memory~
+        +list(space_id: ~str, filter: MemoryFilter) Result~Vec~Memory~~
+        +update_trust(id: ~str, level: TrustLevel) Result~Memory~
+        +adopt(id: ~str) Result~Memory~
+        +reject(id: ~str) Result~Memory~
+        -generate_embedding(content: ~str) Result~Vec~f32~~
+        -index_fulltext(memory: ~Memory) Result~
+    }
+
+    class EmbeddingProvider {
+        <<trait>>
+        +embed(text: ~str) Result~Vec~f32~~
+        +embed_batch(texts: Vec~str~) Result~Vec~Vec~f32~~~
+        +model_name() ~str
+        +dimensions() usize
+    }
+
+    class OnnxEmbedder {
+        -session: Session
+        -tokenizer: Tokenizer
+        -dim: usize
+    }
+
+    class LLMProvider {
+        <<trait>>
+        +complete(req: CompletionRequest) Result~CompletionResponse~
+        +stream(req: CompletionRequest) Result~Stream~
+        +model_name() ~str
+    }
+
+    class DeepSeekProvider {
+        -api_key: String
+        -base_url: String
+        -client: reqwest::Client
+    }
+
+    class SearchEngine {
+        <<trait>>
+        +search(query: SearchQuery) Result~SearchResponse~
+    }
+
+    class HybridSearcher {
+        -semantic: SemanticSearcher
+        -fulltext: FulltextSearcher
+        +search(query: SearchQuery) Result~SearchResponse~
+        -merge_results(semantic, fulltext) Vec~SearchResult~
+    }
+
+    class SemanticSearcher {
+        -repo: MemoryRepo
+        +search(query_vec: Vec~f32~, space_id: ~str, k: usize) Vec~(String, f32)~
+        -cosine_similarity(a: Vec~f32~, b: Vec~f32~) f32
+    }
+
+    class FulltextSearcher {
+        -index: TantivyIndex
+        +search(query: ~str, space_id: ~str, k: usize) Vec~(String, f32)~
+        +add_document(memory: ~Memory) Result~
+        +commit() Result~
+    }
+
+    class SearchResult {
+        +memory: Memory
+        +score: f32
+        +semantic_score: Option~f32~
+        +fulltext_score: Option~f32~
+        +trust_weight: f32
+        +highlight: Option~String~
+    }
+
+    class DocumentParser {
+        <<trait>>
+        +parse(content: ~[u8]~) Result~Vec~MemoryChunk~~
+        +supported_types() Vec~FileType~
+    }
+
+    class MarkdownParser {
+        +parse(content: ~[u8]~) Result~Vec~MemoryChunk~~
+    }
+
+    class TextParser {
+        +parse(content: ~[u8]~) Result~Vec~MemoryChunk~~
+    }
+
+    class PdfParser {
+        +parse(content: ~[u8]~) Result~Vec~MemoryChunk~~
+    }
+
+    class MemoryChunk {
+        +content: String
+        +chunk_index: usize
+        +metadata: Option~Value~
+    }
+
+    class FileType {
+        <<enum>>
+        Markdown
+        Text
+        Pdf
+    }
+
+    class ProposalType {
+        <<enum>>
+        Merge
+        Link
+        Summarize
+        Conflict
+        Archive
+    }
+
+    class ProposalStatus {
+        <<enum>>
+        Pending
+        Approved
+        Rejected
+        Modified
+    }
+
+    class AiProposal {
+        +id: String
+        +space_id: String
+        +proposal_type: ProposalType
+        +source_memory_ids: Vec~String~
+        +proposed_content: Option~String~
+        +proposed_action: Option~Value~
+        +ai_model: Option~String~
+        +confidence: Option~f32~
+        +status: ProposalStatus
+        +reviewer_id: Option~String~
+        +reviewed_at: Option~i64~
+        +review_feedback: Option~String~
+        +created_at: i64
+    }
+
+    class ProposalEngine {
+        -llm: Arc~dyn LLMProvider~
+        -repo: ProposalRepo
+        +scan_space(space_id: ~str) Result~Vec~AiProposal~~
+        +approve(id: ~str, reviewer_id: ~str) Result~
+        +reject(id: ~str, reviewer_id: ~str, feedback: ~str) Result~
+        +modify(id: ~str, reviewer_id: ~str, modified_content: ~str) Result~
+    }
+
+    class AppError {
+        <<enum>>
+        NotFound
+        BadRequest(String)
+        Internal(String)
+        NotImplemented(String)
+        +into_response() Response
+    }
+
+    class AppState {
+        +db: DbPool
+        +tantivy_index: Arc~TantivyIndex~
+        +embedder: Arc~dyn EmbeddingProvider~
+        +llm: Arc~dyn LLMProvider~
+        +config: Arc~AppConfig~
+    }
+
+    class AppConfig {
+        +database_url: String
+        +tantivy_path: String
+        +onnx_model_path: String
+        +llm_provider: String
+        +deepseek_api_key: String
+        +listen_addr: String
+    }
+
+    class MemoryRepo {
+        -conn: Mutex~Connection~
+        +insert_memory(memory: ~Memory) Result~
+        +get_by_id(id: ~str) Result~Memory~
+        +list(space_id: ~str, filter: MemoryFilter) Result~Vec~Memory~~
+        +update_trust(id: ~str, level: f32) Result~
+        +update_review_status(id: ~str, status: ReviewStatus) Result~
+        +load_embeddings(space_id: ~str) Result~Vec~(String, Vec~f32~, f32)~~
+        +update_access_count(ids: Vec~String~) Result~
+    }
+
+    %% Relationships
+    Provenance --> ReviewStatus : default_review_status
+    Memory --> Provenance
+    Memory --> TrustLevel
+    Memory --> ReviewStatus
+    MemoryService --> Memory : manages
+    MemoryService --> EmbeddingProvider : uses
+    MemoryService --> MemoryRepo : uses
+    EmbeddingProvider <|.. OnnxEmbedder
+    LLMProvider <|.. DeepSeekProvider
+    SearchEngine <|.. HybridSearcher
+    HybridSearcher --> SemanticSearcher
+    HybridSearcher --> FulltextSearcher
+    HybridSearcher --> SearchResult : returns
+    SearchResult --> Memory
+    SemanticSearcher --> MemoryRepo
+    DocumentParser <|.. MarkdownParser
+    DocumentParser <|.. TextParser
+    DocumentParser <|.. PdfParser
+    DocumentParser ..> MemoryChunk : produces
+    DocumentParser ..> FileType
+    AiProposal --> ProposalType
+    AiProposal --> ProposalStatus
+    ProposalEngine --> LLMProvider
+    ProposalEngine --> AiProposal : manages
+    AppState --> AppConfig
+    AppState --> EmbeddingProvider
+    AppState --> LLMProvider
+    AppState --> MemoryRepo
+    MemoryService ..> AppError : returns
+    HybridSearcher ..> AppError : returns

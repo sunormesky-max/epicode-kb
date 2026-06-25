@@ -1,0 +1,42 @@
+# Rust
+/backend/target/
+/backend/**/*.rs.bk
+/backend/Cargo.lock
+
+# Node
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.vite/
+
+# Data & models
+/data/
+/models/
+backend/data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.onnx
+*.safetensors
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Tantivy index
+/data/tantivy/

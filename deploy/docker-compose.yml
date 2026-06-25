@@ -1,0 +1,28 @@
+services:
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - EPICODE_KB_LISTEN_ADDR=0.0.0.0:3000
+      - EPICODE_KB_DATABASE_URL=/app/data/epicode_kb.db
+      - EPICODE_KB_TANTIVY_PATH=/app/data/tantivy
+      - EPICODE_KB_UPLOAD_DIR=/app/data/uploads
+      - RUST_LOG=epicode_kb=info
+      # Set your DeepSeek API key here:
+      # - DEEPSEEK_API_KEY=your-key-here
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    restart: unless-stopped
