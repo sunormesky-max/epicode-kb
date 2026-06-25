@@ -1,16 +1,19 @@
 //! epicode-kb: Enterprise knowledge base with memory provenance,
-//! hybrid search, and AI proposal engine.
+//! hybrid search, real-time collaboration, and AI agent integration.
 
 pub mod api;
 pub mod auth;
+pub mod collab;
 pub mod config;
 pub mod db;
 pub mod dream;
 pub mod embed;
 pub mod error;
 pub mod llm;
+pub mod mcp;
 pub mod memory;
 pub mod notify;
+pub mod observability;
 pub mod parse;
 pub mod search;
 pub mod state;

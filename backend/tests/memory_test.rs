@@ -77,6 +77,7 @@ fn test_create_memory_request_validation() {
         trust_level: None,
         provenance_meta: None,
         review_status: None,
+        visibility: None,
     };
     assert!(req.validate().is_ok());
 
@@ -87,6 +88,7 @@ fn test_create_memory_request_validation() {
         trust_level: None,
         provenance_meta: None,
         review_status: None,
+        visibility: None,
     };
     assert!(invalid_req.validate().is_err());
 
@@ -97,6 +99,7 @@ fn test_create_memory_request_validation() {
         trust_level: Some(1.5),
         provenance_meta: None,
         review_status: None,
+        visibility: None,
     };
     assert!(bad_trust_req.validate().is_err());
 }

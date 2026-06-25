@@ -3,16 +3,18 @@
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
 use crate::error::AppResult;
-use crate::parse::{DocumentParser, FileType, MemoryChunk};
-
-/// Maximum chunk size in characters.
-const MAX_CHUNK_SIZE: usize = 512;
+use crate::parse::{split_long_text, DocumentParser, FileType, MemoryChunk};
 
 /// Markdown document parser.
 pub struct MarkdownParser;
 
 impl DocumentParser for MarkdownParser {
-    fn parse(&self, content: &[u8]) -> AppResult<Vec<MemoryChunk>> {
+    fn parse_with_chunk_size(
+        &self,
+        content: &[u8],
+        chunk_size: usize,
+        chunk_overlap: usize,
+    ) -> AppResult<Vec<MemoryChunk>> {
         let text = std::str::from_utf8(content)
             .map_err(|e| crate::error::AppError::bad_request(format!("invalid UTF-8: {}", e)))?;
 
@@ -25,9 +27,14 @@ impl DocumentParser for MarkdownParser {
         for event in parser {
             match event {
                 Event::Start(Tag::Heading { level, .. }) => {
-                    // Flush current chunk if non-empty
                     if !current_text.trim().is_empty() {
-                        self.push_chunk(&mut chunks, &mut current_text, &current_heading);
+                        self.push_chunk(
+                            &mut chunks,
+                            &mut current_text,
+                            &current_heading,
+                            chunk_size,
+                            chunk_overlap,
+                        );
                     }
                     in_heading = true;
                     current_heading = Some(match level {
@@ -44,13 +51,10 @@ impl DocumentParser for MarkdownParser {
                 }
                 Event::Start(Tag::Paragraph)
                 | Event::Start(Tag::List(_))
-                | Event::Start(Tag::CodeBlock(_)) => {
-                    // Just continue accumulating text
-                }
+                | Event::Start(Tag::CodeBlock(_)) => {}
                 Event::End(TagEnd::Paragraph)
                 | Event::End(TagEnd::List(_))
                 | Event::End(TagEnd::CodeBlock) => {
-                    // Add a paragraph break
                     if !current_text.is_empty() && !current_text.ends_with('\n') {
                         current_text.push('\n');
                     }
@@ -72,15 +76,25 @@ impl DocumentParser for MarkdownParser {
                 _ => {}
             }
 
-            // Split if chunk gets too large
-            if current_text.len() >= MAX_CHUNK_SIZE {
-                self.push_chunk(&mut chunks, &mut current_text, &current_heading);
+            if current_text.len() >= chunk_size {
+                self.push_chunk(
+                    &mut chunks,
+                    &mut current_text,
+                    &current_heading,
+                    chunk_size,
+                    chunk_overlap,
+                );
             }
         }
 
-        // Flush remaining text
         if !current_text.trim().is_empty() {
-            self.push_chunk(&mut chunks, &mut current_text, &current_heading);
+            self.push_chunk(
+                &mut chunks,
+                &mut current_text,
+                &current_heading,
+                chunk_size,
+                chunk_overlap,
+            );
         }
 
         if chunks.is_empty() {
@@ -100,12 +114,13 @@ impl DocumentParser for MarkdownParser {
 }
 
 impl MarkdownParser {
-    /// Push the current text as a chunk, splitting if necessary.
     fn push_chunk(
         &self,
         chunks: &mut Vec<MemoryChunk>,
         text: &mut String,
         heading: &Option<String>,
+        chunk_size: usize,
+        chunk_overlap: usize,
     ) {
         let trimmed = text.trim().to_string();
         if trimmed.is_empty() {
@@ -113,62 +128,25 @@ impl MarkdownParser {
             return;
         }
 
-        // If the text is too long, split by sentences or fixed size
-        if trimmed.len() > MAX_CHUNK_SIZE {
-            let parts = Self::split_long_text(&trimmed, MAX_CHUNK_SIZE);
-            for part in parts {
-                let metadata = heading
-                    .as_ref()
-                    .map(|h| serde_json::json!({ "heading": h }));
-                chunks.push(MemoryChunk {
-                    content: part,
-                    chunk_index: chunks.len(),
-                    metadata,
-                });
-            }
+        let parts = if trimmed.len() > chunk_size {
+            split_long_text(&trimmed, chunk_size, chunk_overlap)
         } else {
-            let metadata = heading
-                .as_ref()
-                .map(|h| serde_json::json!({ "heading": h }));
+            vec![trimmed]
+        };
+
+        for part in parts {
+            let metadata = heading.as_ref().map(|h| {
+                serde_json::json!({
+                    "source": "markdown",
+                    "heading": h,
+                })
+            });
             chunks.push(MemoryChunk {
-                content: trimmed,
+                content: part,
                 chunk_index: chunks.len(),
                 metadata,
             });
         }
         text.clear();
-    }
-
-    /// Split a long text into chunks, trying to break at sentence boundaries.
-    fn split_long_text(text: &str, max_size: usize) -> Vec<String> {
-        let mut result = Vec::new();
-        let mut current = String::new();
-
-        for sentence in text.split_inclusive(['.', '!', '?']) {
-            if current.len() + sentence.len() > max_size && !current.is_empty() {
-                result.push(current.trim().to_string());
-                current.clear();
-            }
-            current.push_str(sentence);
-        }
-
-        if !current.trim().is_empty() {
-            // If still too long, split by fixed size
-            if current.len() > max_size {
-                for chunk in current.as_bytes().chunks(max_size) {
-                    if let Ok(s) = std::str::from_utf8(chunk) {
-                        result.push(s.trim().to_string());
-                    }
-                }
-            } else {
-                result.push(current.trim().to_string());
-            }
-        }
-
-        if result.is_empty() {
-            result.push(text.trim().to_string());
-        }
-
-        result
     }
 }

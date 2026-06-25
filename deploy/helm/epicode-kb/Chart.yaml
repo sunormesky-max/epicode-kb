@@ -1,0 +1,6 @@
+apiVersion: v2
+name: epicode-kb
+description: Epicode KB knowledge base platform
+type: application
+version: 0.2.0
+appVersion: "0.2.0"

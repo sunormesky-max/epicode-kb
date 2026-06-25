@@ -1,0 +1,36 @@
+replicaCount: 2
+
+postgresql:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 50Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: kb.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: epicode-kb-tls
+      hosts:
+        - kb.example.com
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi

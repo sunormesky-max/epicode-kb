@@ -13,6 +13,15 @@ pub enum AppError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
+
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     #[error("not found: {0}")]
     NotFound(String),
 
@@ -39,12 +48,36 @@ pub enum AppError {
 
     #[error("http error: {0}")]
     Http(#[from] reqwest::Error),
+
+    #[error("jwt error: {0}")]
+    Jwt(String),
+
+    #[error("password hash error: {0}")]
+    PasswordHash(String),
+
+    #[error("websocket error: {0}")]
+    WebSocket(String),
 }
 
 impl AppError {
     /// Create a bad request error.
     pub fn bad_request(msg: impl Into<String>) -> Self {
         AppError::BadRequest(msg.into())
+    }
+
+    /// Create an unauthorized error.
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        AppError::Unauthorized(msg.into())
+    }
+
+    /// Create a forbidden error.
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        AppError::Forbidden(msg.into())
+    }
+
+    /// Create a conflict error.
+    pub fn conflict(msg: impl Into<String>) -> Self {
+        AppError::Conflict(msg.into())
     }
 
     /// Create a not found error.
@@ -61,6 +94,16 @@ impl AppError {
     pub fn not_implemented(msg: impl Into<String>) -> Self {
         AppError::NotImplemented(msg.into())
     }
+
+    /// Create a JWT error.
+    pub fn jwt(msg: impl Into<String>) -> Self {
+        AppError::Jwt(msg.into())
+    }
+
+    /// Create a password hash error.
+    pub fn password_hash(msg: impl Into<String>) -> Self {
+        AppError::PasswordHash(msg.into())
+    }
 }
 
 /// Error code mapping.
@@ -68,6 +111,9 @@ impl AppError {
     fn error_code(&self) -> i32 {
         match self {
             AppError::BadRequest(_) => 40000,
+            AppError::Unauthorized(_) => 40100,
+            AppError::Forbidden(_) => 40300,
+            AppError::Conflict(_) => 40900,
             AppError::NotFound(_) => 40400,
             AppError::Internal(_) => 50000,
             AppError::NotImplemented(_) => 50100,
@@ -77,12 +123,18 @@ impl AppError {
             AppError::Tantivy(_) => 50004,
             AppError::TantivyQueryParse(_) => 50006,
             AppError::Http(_) => 50005,
+            AppError::Jwt(_) => 40101,
+            AppError::PasswordHash(_) => 50007,
+            AppError::WebSocket(_) => 50008,
         }
     }
 
     fn status_code(&self) -> StatusCode {
         match self {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            AppError::Unauthorized(_) | AppError::Jwt(_) => StatusCode::UNAUTHORIZED,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
             AppError::Internal(_)
@@ -91,7 +143,9 @@ impl AppError {
             | AppError::Io(_)
             | AppError::Tantivy(_)
             | AppError::TantivyQueryParse(_)
-            | AppError::Http(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | AppError::Http(_)
+            | AppError::PasswordHash(_)
+            | AppError::WebSocket(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }

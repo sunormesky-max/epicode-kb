@@ -1,0 +1,12 @@
+replicaCount: 1
+
+postgresql:
+  enabled: true
+  persistence:
+    enabled: false
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: false

@@ -3,15 +3,17 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::api::ApiResponse;
+use crate::auth::model::Actor;
 use crate::error::AppError;
 use crate::memory::model::{
-    CreateMemoryRequest, Memory, Provenance, ReviewStatus, UpdateTrustRequest,
+    ConflictResolutionRequest, CreateMemoryRequest, Memory, Provenance, ReviewStatus,
+    SaveVersionRequest, UpdateTrustRequest, UpdateVisibilityRequest,
 };
 use crate::memory::service::MemoryService;
 use crate::state::AppState;
@@ -19,17 +21,11 @@ use crate::state::AppState;
 /// POST /api/v1/remember — write a memory.
 pub async fn remember(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<CreateMemoryRequest>,
+    Extension(actor): Extension<Actor>,
+    Json(body): Json<CreateMemoryRequest>,
 ) -> Result<Json<ApiResponse<RememberResponse>>, AppError> {
-    let service = MemoryService::new(
-        state.db.clone(),
-        state.embedder.clone(),
-        state.tantivy_index.clone(),
-        state.tantivy_writer.clone(),
-        state.tantivy_schema.clone(),
-    );
-
-    let memory = service.create(req)?;
+    let service = MemoryService::from_state(&state);
+    let memory = service.create(body, Some(&actor))?;
 
     Ok(Json(ApiResponse::ok(RememberResponse {
         id: memory.id.clone(),
@@ -43,32 +39,12 @@ pub async fn remember(
     })))
 }
 
-/// Response for POST /remember.
-#[derive(Debug, Serialize)]
-pub struct RememberResponse {
-    pub id: String,
-    pub space_id: String,
-    pub content: String,
-    pub provenance: Provenance,
-    pub trust_level: f32,
-    pub review_status: ReviewStatus,
-    pub embedding_generated: bool,
-    pub created_at: i64,
-}
-
 /// GET /api/v1/memories/:id — get a single memory.
 pub async fn get_memory(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Memory>>, AppError> {
-    let service = MemoryService::new(
-        state.db.clone(),
-        state.embedder.clone(),
-        state.tantivy_index.clone(),
-        state.tantivy_writer.clone(),
-        state.tantivy_schema.clone(),
-    );
-
+    let service = MemoryService::from_state(&state);
     let memory = service.get_by_id(&id)?;
     Ok(Json(ApiResponse::ok(memory)))
 }
@@ -80,6 +56,7 @@ pub struct ListMemoriesQuery {
     pub provenance: Option<String>,
     pub min_trust: Option<f32>,
     pub review_status: Option<String>,
+    pub visibility: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -98,13 +75,7 @@ pub async fn list_memories(
     State(state): State<Arc<AppState>>,
     Query(q): Query<ListMemoriesQuery>,
 ) -> Result<Json<ApiResponse<ListMemoriesResponse>>, AppError> {
-    let service = MemoryService::new(
-        state.db.clone(),
-        state.embedder.clone(),
-        state.tantivy_index.clone(),
-        state.tantivy_writer.clone(),
-        state.tantivy_schema.clone(),
-    );
+    let service = MemoryService::from_state(&state);
 
     let provenance_filter: Option<Vec<Provenance>> = q.provenance.as_ref().map(|s| {
         s.split(',')
@@ -117,6 +88,11 @@ pub async fn list_memories(
         .as_ref()
         .and_then(|s| ReviewStatus::parse_str(s).ok());
 
+    let visibility = q
+        .visibility
+        .as_ref()
+        .and_then(|s| crate::memory::model::Visibility::parse_str(s).ok());
+
     let limit = q.limit.unwrap_or(20).min(100);
     let offset = q.offset.unwrap_or(0);
 
@@ -125,6 +101,7 @@ pub async fn list_memories(
         provenance_filter.as_deref(),
         q.min_trust,
         review_status,
+        visibility,
         limit,
         offset,
     )?;
@@ -140,24 +117,122 @@ pub async fn list_memories(
 /// POST /api/v1/memories/:id/trust — adjust trust level.
 pub async fn update_trust(
     State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
-    Json(req): Json<UpdateTrustRequest>,
+    Json(body): Json<UpdateTrustRequest>,
 ) -> Result<Json<ApiResponse<TrustUpdateResponse>>, AppError> {
-    let service = MemoryService::new(
-        state.db.clone(),
-        state.embedder.clone(),
-        state.tantivy_index.clone(),
-        state.tantivy_writer.clone(),
-        state.tantivy_schema.clone(),
-    );
-
-    let memory = service.update_trust(&id, &req)?;
+    let service = MemoryService::from_state(&state);
+    let memory = service.update_trust(&id, &body, &actor)?;
 
     Ok(Json(ApiResponse::ok(TrustUpdateResponse {
         id: memory.id,
         trust_level: memory.trust_level.value(),
         updated_at: memory.updated_at,
     })))
+}
+
+/// PUT /api/v1/memories/:id/visibility — update memory visibility.
+pub async fn update_visibility(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateVisibilityRequest>,
+) -> Result<Json<ApiResponse<Memory>>, AppError> {
+    let service = MemoryService::from_state(&state);
+    let memory = service.update_visibility(&id, body.visibility, &actor)?;
+    Ok(Json(ApiResponse::ok(memory)))
+}
+
+/// POST /api/v1/memories/:id/adopt — adopt an AI memory.
+pub async fn adopt_memory(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<Memory>>, AppError> {
+    let service = MemoryService::from_state(&state);
+    let memory = service.adopt(&id, &actor)?;
+    Ok(Json(ApiResponse::ok(memory)))
+}
+
+/// POST /api/v1/memories/:id/reject — reject an AI memory.
+pub async fn reject_memory(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<Memory>>, AppError> {
+    let service = MemoryService::from_state(&state);
+    let memory = service.reject(&id, &actor)?;
+    Ok(Json(ApiResponse::ok(memory)))
+}
+
+/// POST /api/v1/memories/:id/save — save a new version.
+pub async fn save_version(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    Json(body): Json<SaveVersionRequest>,
+) -> Result<Json<ApiResponse<crate::db::repository::MemoryVersion>>, AppError> {
+    let service = MemoryService::from_state(&state);
+    let version = service.save_version(&id, body, &actor)?;
+    Ok(Json(ApiResponse::ok(version)))
+}
+
+/// GET /api/v1/memories/:id/versions — list versions.
+pub async fn list_versions(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<ListVersionsQuery>,
+) -> Result<Json<ApiResponse<ListVersionsResponse>>, AppError> {
+    let service = MemoryService::from_state(&state);
+    let limit = q.limit.unwrap_or(20).min(100);
+    let offset = q.offset.unwrap_or(0);
+    let (versions, total) = service.list_versions(&id, limit, offset)?;
+    Ok(Json(ApiResponse::ok(ListVersionsResponse {
+        versions,
+        total,
+        limit,
+        offset,
+    })))
+}
+
+/// POST /api/v1/memories/:id/versions/:vid/revert — revert to a version.
+pub async fn revert_version(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<Actor>,
+    Path((id, vid)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<Memory>>, AppError> {
+    let service = MemoryService::from_state(&state);
+    let memory = service.revert(&id, &vid, &actor)?;
+    Ok(Json(ApiResponse::ok(memory)))
+}
+
+/// POST /api/v1/memories/:id/resolve — resolve a conflict.
+pub async fn resolve_conflict(
+    State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    Json(body): Json<ConflictResolutionRequest>,
+) -> Result<Json<ApiResponse<Memory>>, AppError> {
+    let service = MemoryService::from_state(&state);
+    let memory = service.resolve_conflict(&id, body, &actor)?;
+    Ok(Json(ApiResponse::ok(memory)))
+}
+
+// ============================================================
+// Response DTOs
+// ============================================================
+
+/// Response for POST /remember.
+#[derive(Debug, Serialize)]
+pub struct RememberResponse {
+    pub id: String,
+    pub space_id: String,
+    pub content: String,
+    pub provenance: Provenance,
+    pub trust_level: f32,
+    pub review_status: ReviewStatus,
+    pub embedding_generated: bool,
+    pub created_at: i64,
 }
 
 /// Response for trust update.
@@ -168,36 +243,16 @@ pub struct TrustUpdateResponse {
     pub updated_at: i64,
 }
 
-/// POST /api/v1/memories/:id/adopt — adopt an AI memory.
-pub async fn adopt_memory(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<ApiResponse<Memory>>, AppError> {
-    let service = MemoryService::new(
-        state.db.clone(),
-        state.embedder.clone(),
-        state.tantivy_index.clone(),
-        state.tantivy_writer.clone(),
-        state.tantivy_schema.clone(),
-    );
-
-    let memory = service.adopt(&id)?;
-    Ok(Json(ApiResponse::ok(memory)))
+#[derive(Debug, Deserialize)]
+pub struct ListVersionsQuery {
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
-/// POST /api/v1/memories/:id/reject — reject an AI memory.
-pub async fn reject_memory(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<ApiResponse<Memory>>, AppError> {
-    let service = MemoryService::new(
-        state.db.clone(),
-        state.embedder.clone(),
-        state.tantivy_index.clone(),
-        state.tantivy_writer.clone(),
-        state.tantivy_schema.clone(),
-    );
-
-    let memory = service.reject(&id)?;
-    Ok(Json(ApiResponse::ok(memory)))
+#[derive(Debug, Serialize)]
+pub struct ListVersionsResponse {
+    pub versions: Vec<crate::db::repository::MemoryVersion>,
+    pub total: usize,
+    pub limit: usize,
+    pub offset: usize,
 }

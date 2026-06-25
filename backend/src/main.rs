@@ -1,5 +1,7 @@
 //! epicode-kb server entry point.
 
+use std::sync::Arc;
+
 use epicode_kb::{api, config::AppConfig, state::AppState};
 
 #[tokio::main]
@@ -30,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(config.clone()).await?;
 
     // Build router
-    let app = api::routes::create_router(std::sync::Arc::new(state));
+    let app = api::routes::create_router(Arc::new(state));
 
     // Start server
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;

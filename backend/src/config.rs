@@ -19,10 +19,35 @@ pub struct AppConfig {
     pub upload_dir: String,
     /// Maximum upload size in bytes.
     pub max_upload_size: usize,
+
+    /// JWT secret for signing tokens.
+    pub jwt_secret: String,
+    /// JWT access token expiration in seconds.
+    pub jwt_access_ttl: i64,
+    /// JWT refresh token expiration in seconds.
+    pub jwt_refresh_ttl: i64,
+
+    /// API key hashing salt (hex encoded, optional).
+    pub api_key_salt: Option<String>,
+    /// Whether agent writes are globally enabled.
+    pub agent_write_enabled: bool,
+
     /// DeepSeek API key (optional).
     pub deepseek_api_key: Option<String>,
     /// DeepSeek API base URL.
     pub deepseek_base_url: String,
+
+    /// OIDC issuer URL (optional).
+    pub oidc_issuer_url: Option<String>,
+    /// OIDC client ID (optional).
+    pub oidc_client_id: Option<String>,
+    /// OIDC client secret (optional).
+    pub oidc_client_secret: Option<String>,
+
+    /// Default chunk size for document parsing.
+    pub chunk_size: usize,
+    /// Default chunk overlap for document parsing.
+    pub chunk_overlap: usize,
 }
 
 impl AppConfig {
@@ -47,9 +72,40 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(10 * 1024 * 1024),
+
+            jwt_secret: std::env::var("EPICODE_KB_JWT_SECRET")
+                .unwrap_or_else(|_| "change-me-in-production".to_string()),
+            jwt_access_ttl: std::env::var("EPICODE_KB_JWT_ACCESS_TTL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3600),
+            jwt_refresh_ttl: std::env::var("EPICODE_KB_JWT_REFRESH_TTL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(7 * 24 * 3600),
+
+            api_key_salt: std::env::var("EPICODE_KB_API_KEY_SALT").ok(),
+            agent_write_enabled: std::env::var("EPICODE_KB_AGENT_WRITE_ENABLED")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(true),
+
             deepseek_api_key: std::env::var("DEEPSEEK_API_KEY").ok(),
             deepseek_base_url: std::env::var("DEEPSEEK_BASE_URL")
                 .unwrap_or_else(|_| "https://api.deepseek.com".to_string()),
+
+            oidc_issuer_url: std::env::var("EPICODE_KB_OIDC_ISSUER_URL").ok(),
+            oidc_client_id: std::env::var("EPICODE_KB_OIDC_CLIENT_ID").ok(),
+            oidc_client_secret: std::env::var("EPICODE_KB_OIDC_CLIENT_SECRET").ok(),
+
+            chunk_size: std::env::var("EPICODE_KB_CHUNK_SIZE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(512),
+            chunk_overlap: std::env::var("EPICODE_KB_CHUNK_OVERLAP")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(64),
         }
     }
 
@@ -69,8 +125,18 @@ impl Default for AppConfig {
             embed_dimensions: 384,
             upload_dir: "data/uploads".to_string(),
             max_upload_size: 10 * 1024 * 1024,
+            jwt_secret: "change-me-in-production".to_string(),
+            jwt_access_ttl: 3600,
+            jwt_refresh_ttl: 7 * 24 * 3600,
+            api_key_salt: None,
+            agent_write_enabled: true,
             deepseek_api_key: None,
             deepseek_base_url: "https://api.deepseek.com".to_string(),
+            oidc_issuer_url: None,
+            oidc_client_id: None,
+            oidc_client_secret: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
         }
     }
 }

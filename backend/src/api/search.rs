@@ -23,6 +23,7 @@ pub struct SearchParams {
     pub min_trust: Option<f32>,
     pub provenance: Option<String>,
     pub review_status: Option<String>,
+    pub visibility: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -49,6 +50,11 @@ pub async fn search(
         .as_ref()
         .and_then(|s| ReviewStatus::parse_str(s).ok());
 
+    let visibility = params
+        .visibility
+        .as_ref()
+        .and_then(|s| crate::memory::model::Visibility::parse_str(s).ok());
+
     let query = SearchQuery {
         q: params.q,
         space_id: params.space_id,
@@ -56,6 +62,7 @@ pub async fn search(
         min_trust: params.min_trust,
         provenance,
         review_status,
+        visibility,
         limit: params.limit.unwrap_or(20).min(100),
         offset: params.offset.unwrap_or(0),
     };
@@ -81,6 +88,7 @@ pub async fn recall(
         min_trust: None,
         provenance: None,
         review_status: Some(ReviewStatus::Accepted),
+        visibility: None,
         limit: req.limit.min(50),
         offset: 0,
     };

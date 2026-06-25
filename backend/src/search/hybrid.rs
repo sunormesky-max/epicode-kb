@@ -165,6 +165,7 @@ impl HybridSearcher {
                     query.min_trust,
                     query.provenance.as_deref(),
                     query.review_status,
+                    query.visibility,
                 ) {
                     return None;
                 }

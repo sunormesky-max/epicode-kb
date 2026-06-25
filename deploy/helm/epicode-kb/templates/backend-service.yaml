@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "epicode-kb.name" . }}-backend
+  labels:
+    {{- include "epicode-kb.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.backend.type }}
+  ports:
+    - port: {{ .Values.service.backend.port }}
+      targetPort: 3000
+  selector:
+    {{- include "epicode-kb.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: backend

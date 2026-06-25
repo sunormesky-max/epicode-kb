@@ -5,6 +5,11 @@ import Upload from './pages/Upload'
 import Search from './pages/Search'
 import Review from './pages/Review'
 import Graph from './pages/Graph'
+import Login from './pages/Login'
+import AdminConsole from './pages/AdminConsole'
+import SpaceSettings from './pages/SpaceSettings'
+import MemoryEditor from './pages/MemoryEditor'
+import AgentIntegration from './pages/AgentIntegration'
 
 export default function App() {
   return (
@@ -16,7 +21,11 @@ export default function App() {
           <Route path="/search" element={<Search />} />
           <Route path="/review" element={<Review />} />
           <Route path="/graph" element={<Graph />} />
+          <Route path="/spaces/:id/settings" element={<SpaceSettings />} />
+          <Route path="/memories/:id/edit" element={<MemoryEditor />} />
+          <Route path="/agent" element={<AgentIntegration />} />
         </Route>
+        <Route path="/login" element={<Login />} />
       </Routes>
     </BrowserRouter>
   )

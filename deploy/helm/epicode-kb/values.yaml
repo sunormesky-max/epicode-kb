@@ -1,0 +1,54 @@
+replicaCount: 1
+
+image:
+  backend:
+    repository: epicode-kb-backend
+    tag: "0.2.0"
+    pullPolicy: IfNotPresent
+  frontend:
+    repository: epicode-kb-frontend
+    tag: "0.2.0"
+    pullPolicy: IfNotPresent
+
+service:
+  backend:
+    type: ClusterIP
+    port: 3000
+  frontend:
+    type: ClusterIP
+    port: 80
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: epicode-kb.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+postgresql:
+  enabled: true
+  auth:
+    username: epicode
+    password: changeme
+    database: epicode_kb
+  persistence:
+    enabled: true
+    size: 10Gi
+
+config:
+  jwtAccessSecret: change-me-access-secret
+  jwtRefreshSecret: change-me-refresh-secret
+  agentWriteEnabled: "true"
+  apiKeySalt: change-me-salt
+
+resources: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80

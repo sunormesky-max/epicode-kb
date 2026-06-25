@@ -1,8 +1,13 @@
 //! Health and system API endpoints.
 
-use axum::{extract::Path, Json};
+use std::sync::Arc;
+
+use axum::{extract::Path, extract::State, response::Response, Json};
 use serde::Serialize;
 use serde_json::json;
+
+use crate::error::AppError;
+use crate::state::AppState;
 
 /// GET /api/v1/system/health — system health check.
 pub async fn system_health() -> Json<serde_json::Value> {
@@ -26,6 +31,25 @@ pub async fn system_version() -> Json<serde_json::Value> {
             "name": env!("CARGO_PKG_NAME"),
             "description": env!("CARGO_PKG_DESCRIPTION"),
         },
+        "message": "ok"
+    }))
+}
+
+/// GET /api/v1/health/live — liveness probe.
+pub async fn live() -> Json<serde_json::Value> {
+    Json(json!({
+        "code": 0,
+        "data": { "status": "ok" },
+        "message": "ok"
+    }))
+}
+
+/// GET /api/v1/health/ready — readiness probe.
+pub async fn ready(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let _guard = state.db.lock().unwrap();
+    Json(json!({
+        "code": 0,
+        "data": { "status": "ok" },
         "message": "ok"
     }))
 }
@@ -64,6 +88,15 @@ pub async fn graph() -> Json<serde_json::Value> {
         "data": null,
         "message": "not implemented: knowledge graph (planned for Sprint 2)"
     }))
+}
+
+/// GET /api/v1/metrics — Prometheus metrics.
+pub async fn metrics(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    let output = state.metrics.gather()?;
+    Ok(Response::builder()
+        .header("content-type", "text/plain; charset=utf-8")
+        .body(axum::body::Body::from(output))
+        .unwrap())
 }
 
 /// System health response.

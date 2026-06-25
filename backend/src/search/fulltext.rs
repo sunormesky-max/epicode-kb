@@ -22,6 +22,8 @@ pub struct TantivySchema {
     pub space_id: Field,
     pub content: Field,
     pub provenance: Field,
+    pub review_status: Field,
+    pub visibility: Field,
     pub trust_level: Field,
     pub created_at: Field,
 }
@@ -41,6 +43,12 @@ impl TantivySchema {
             provenance: schema
                 .get_field("provenance")
                 .expect("missing field: provenance"),
+            review_status: schema
+                .get_field("review_status")
+                .expect("missing field: review_status"),
+            visibility: schema
+                .get_field("visibility")
+                .expect("missing field: visibility"),
             trust_level: schema
                 .get_field("trust_level")
                 .expect("missing field: trust_level"),
@@ -58,6 +66,8 @@ pub fn create_schema() -> Schema {
     builder.add_text_field("space_id", STRING | STORED);
     builder.add_text_field("content", TEXT | STORED);
     builder.add_text_field("provenance", STRING | STORED);
+    builder.add_text_field("review_status", STRING | STORED);
+    builder.add_text_field("visibility", STRING | STORED);
     builder.add_f64_field("trust_level", STORED | INDEXED);
     builder.add_i64_field("created_at", STORED | INDEXED);
     builder.build()

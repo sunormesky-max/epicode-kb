@@ -7,7 +7,7 @@ pub mod semantic;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppResult;
-use crate::memory::model::{Memory, Provenance, ReviewStatus};
+use crate::memory::model::{Memory, Provenance, ReviewStatus, Visibility};
 
 /// Search engine trait.
 pub trait SearchEngine: Send + Sync {
@@ -31,6 +31,8 @@ pub struct SearchQuery {
     pub provenance: Option<Vec<Provenance>>,
     /// Review status filter.
     pub review_status: Option<ReviewStatus>,
+    /// Visibility filter.
+    pub visibility: Option<Visibility>,
     /// Maximum number of results.
     #[serde(default = "default_limit")]
     pub limit: usize,
@@ -104,6 +106,7 @@ pub fn passes_filters(
     min_trust: Option<f32>,
     provenance: Option<&[Provenance]>,
     review_status: Option<ReviewStatus>,
+    visibility: Option<Visibility>,
 ) -> bool {
     if let Some(trust) = min_trust {
         if memory.trust_level.value() < trust {
@@ -117,6 +120,11 @@ pub fn passes_filters(
     }
     if let Some(status) = review_status {
         if memory.review_status != status {
+            return false;
+        }
+    }
+    if let Some(vis) = visibility {
+        if memory.visibility != vis {
             return false;
         }
     }

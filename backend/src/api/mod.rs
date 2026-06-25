@@ -1,7 +1,10 @@
 //! API route layer.
 
+pub mod agent;
 pub mod auth;
+pub mod collab;
 pub mod health;
+pub mod mcp;
 pub mod memory;
 pub mod proposal;
 pub mod routes;

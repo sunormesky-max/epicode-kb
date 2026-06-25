@@ -1,4 +1,4 @@
-//! Memory domain model: Provenance, TrustLevel, ReviewStatus, Memory.
+//! Memory domain model: Provenance, TrustLevel, ReviewStatus, Memory, Visibility.
 
 use serde::{Deserialize, Serialize};
 
@@ -160,6 +160,48 @@ impl ReviewStatus {
 }
 
 // ============================================================
+// Visibility
+// ============================================================
+
+/// Memory visibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Visibility {
+    /// Inherit space visibility.
+    #[default]
+    Inherit,
+    /// Only space members can see.
+    SpaceOnly,
+    /// Only author/space owner.
+    Private,
+    /// Only selected users (memory_permissions table).
+    Selected,
+}
+
+impl Visibility {
+    /// String representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Visibility::Inherit => "inherit",
+            Visibility::SpaceOnly => "space_only",
+            Visibility::Private => "private",
+            Visibility::Selected => "selected",
+        }
+    }
+
+    /// Parse from string.
+    pub fn parse_str(s: &str) -> Result<Self, String> {
+        match s {
+            "inherit" => Ok(Visibility::Inherit),
+            "space_only" => Ok(Visibility::SpaceOnly),
+            "private" => Ok(Visibility::Private),
+            "selected" => Ok(Visibility::Selected),
+            _ => Err(format!("invalid visibility: {}", s)),
+        }
+    }
+}
+
+// ============================================================
 // Memory
 // ============================================================
 
@@ -186,6 +228,16 @@ pub struct Memory {
     pub trust_level: TrustLevel,
     /// Review status.
     pub review_status: ReviewStatus,
+    /// Memory visibility.
+    pub visibility: Visibility,
+    /// For version snapshots, points to the root memory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_of: Option<String>,
+    /// Version sequence number (0 = original).
+    pub version_seq: i64,
+    /// Author user ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_id: Option<String>,
     /// Parent conflict memory ID (if this is a conflict resolution).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_conflict_id: Option<String>,
@@ -215,6 +267,10 @@ impl Memory {
             provenance_meta: None,
             trust_level,
             review_status,
+            visibility: Visibility::Inherit,
+            version_of: None,
+            version_seq: 0,
+            author_id: None,
             parent_conflict_id: None,
             last_accessed_at: None,
             access_count: 0,
@@ -244,6 +300,8 @@ pub struct CreateMemoryRequest {
     pub provenance_meta: Option<serde_json::Value>,
     /// Optional review status override.
     pub review_status: Option<ReviewStatus>,
+    /// Optional visibility override.
+    pub visibility: Option<Visibility>,
 }
 
 impl CreateMemoryRequest {
@@ -285,6 +343,35 @@ impl UpdateTrustRequest {
         }
         Ok(())
     }
+}
+
+/// Request to update memory visibility.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateVisibilityRequest {
+    pub visibility: Visibility,
+}
+
+/// Request to save a new version.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveVersionRequest {
+    pub content: String,
+    pub edit_summary: Option<String>,
+}
+
+/// Request to resolve a conflict.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConflictResolutionRequest {
+    pub resolution: ConflictResolution,
+    pub content: Option<String>,
+}
+
+/// Conflict resolution strategy.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictResolution {
+    Mine,
+    Theirs,
+    Merge,
 }
 
 /// Request to recall context.

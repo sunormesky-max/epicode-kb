@@ -4,12 +4,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
-    extract::{Multipart, State},
+    extract::{Extension, Multipart, State},
     Json,
 };
 use serde::Serialize;
 
 use crate::api::ApiResponse;
+use crate::auth::model::Actor;
 use crate::error::AppError;
 use crate::memory::model::{CreateMemoryRequest, Provenance};
 use crate::memory::service::MemoryService;
@@ -19,6 +20,7 @@ use crate::state::AppState;
 /// POST /api/v1/upload — upload a document (multipart/form-data).
 pub async fn upload(
     State(state): State<Arc<AppState>>,
+    Extension(actor): Extension<Actor>,
     mut multipart: Multipart,
 ) -> Result<Json<ApiResponse<UploadResponse>>, AppError> {
     let start = Instant::now();
@@ -27,6 +29,7 @@ pub async fn upload(
     let mut file_name: Option<String> = None;
     let mut space_id: Option<String> = None;
     let mut provenance: Option<Provenance> = None;
+    let mut chunk_size: Option<usize> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -63,8 +66,14 @@ pub async fn upload(
                     .map_err(|e| AppError::bad_request(format!("read provenance error: {}", e)))?;
                 provenance = Provenance::parse_str(&text).ok();
             }
+            "chunk_size" => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::bad_request(format!("read chunk_size error: {}", e)))?;
+                chunk_size = text.parse().ok();
+            }
             _ => {
-                // Skip unknown fields
                 let _ = field.bytes().await;
             }
         }
@@ -75,23 +84,16 @@ pub async fn upload(
     let space = space_id.unwrap_or_else(|| "sp_default".to_string());
     let prov = provenance.unwrap_or(Provenance::Human);
 
-    // Get parser for file type
     let parser = get_parser_for_file(&filename)?;
     let file_type = FileType::from_filename(&filename).unwrap_or(FileType::Text);
 
-    // Parse file into chunks
-    let chunks = parser.parse(&file_bytes)?;
+    // Parse file into chunks using configured chunk size.
+    let chunk_size = chunk_size.unwrap_or(state.config.chunk_size);
+    let chunks =
+        parser.parse_with_chunk_size(&file_bytes, chunk_size, state.config.chunk_overlap)?;
     let total_chunks = chunks.len();
 
-    // Create memories from chunks
-    let service = MemoryService::new(
-        state.db.clone(),
-        state.embedder.clone(),
-        state.tantivy_index.clone(),
-        state.tantivy_writer.clone(),
-        state.tantivy_schema.clone(),
-    );
-
+    let service = MemoryService::from_state(&state);
     let mut memories_created: Vec<MemoryCreated> = Vec::new();
 
     for chunk in &chunks {
@@ -102,9 +104,10 @@ pub async fn upload(
             trust_level: None,
             provenance_meta: chunk.metadata.clone(),
             review_status: None,
+            visibility: None,
         };
 
-        match service.create(req) {
+        match service.create(req, Some(&actor)) {
             Ok(memory) => {
                 let preview = if memory.content.len() > 100 {
                     format!("{}...", &memory.content[..100])

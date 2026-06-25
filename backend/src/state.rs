@@ -5,10 +5,13 @@ use std::sync::Arc;
 use rusqlite::Connection;
 use tantivy::{Index, IndexWriter};
 
+use crate::auth::service::AuthService;
+use crate::collab::room::RoomManager;
 use crate::config::AppConfig;
 use crate::db;
 use crate::embed::{self, EmbeddingProvider};
 use crate::error::AppResult;
+use crate::observability::metrics::Metrics;
 use crate::search::fulltext::{self, TantivySchema};
 use crate::search::hybrid::HybridSearcher;
 use crate::search::semantic::SemanticSearcher;
@@ -30,10 +33,16 @@ pub struct AppState {
     pub embedder: Arc<dyn EmbeddingProvider>,
     /// Hybrid search engine.
     pub search_engine: Arc<HybridSearcher>,
+    /// Authentication & API key service.
+    pub auth_service: Arc<AuthService>,
+    /// Collaboration room manager.
+    pub room_manager: Arc<RoomManager>,
+    /// Prometheus metrics.
+    pub metrics: Arc<Metrics>,
 }
 
 impl AppState {
-    /// Initialize all application state: database, Tantivy index, embedder.
+    /// Initialize all application state: database, Tantivy index, embedder, auth, metrics.
     pub async fn new(config: Arc<AppConfig>) -> AppResult<Self> {
         // Ensure directories exist
         std::fs::create_dir_all("data")?;
@@ -67,6 +76,15 @@ impl AppState {
             fulltext_searcher,
         ));
 
+        // Initialize authentication service
+        let auth_service = Arc::new(AuthService::new(db_pool.clone(), config.clone()));
+
+        // Initialize collaboration room manager
+        let room_manager = Arc::new(RoomManager::new(db_pool.clone()));
+
+        // Initialize metrics
+        let metrics = Arc::new(Metrics::new());
+
         Ok(Self {
             config,
             db: db_pool,
@@ -75,6 +93,9 @@ impl AppState {
             tantivy_schema,
             embedder,
             search_engine,
+            auth_service,
+            room_manager,
+            metrics,
         })
     }
 }

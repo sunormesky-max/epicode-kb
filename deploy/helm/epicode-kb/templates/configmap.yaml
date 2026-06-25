@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "epicode-kb.name" . }}-config
+  labels:
+    {{- include "epicode-kb.labels" . | nindent 4 }}
+data:
+  EPICODE_KB_LISTEN_ADDR: "0.0.0.0:3000"
+  EPICODE_KB_AGENT_WRITE_ENABLED: {{ .Values.config.agentWriteEnabled | quote }}
+  RUST_LOG: "epicode_kb=info"
