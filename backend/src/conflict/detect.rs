@@ -58,7 +58,7 @@ impl ConflictDetector {
             .collect();
 
         let mut conflicts = Vec::new();
-        let target_vec: Vec<f32> = embedding.iter().map(|&x| x).collect();
+        let target_vec: Vec<f32> = embedding.iter().copied().collect();
 
         for (cand_id, cand_content, cand_blob) in &rows {
             let cand_emb: Vec<f32> = crate::db::repository::blob_to_embedding(cand_blob);

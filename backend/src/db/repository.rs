@@ -1060,16 +1060,12 @@ impl ProposalRepo {
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<crate::dream::proposal::AiProposal>> {
-        let sql = if let Some(s) = status {
-            format!(
-                "SELECT id, space_id, proposal_type, source_memory_ids, proposed_content, proposed_action, ai_model, confidence, status, reviewer_id, reviewed_at, review_feedback, created_at
-                 FROM ai_proposals WHERE space_id = ?1 AND status = ?2 ORDER BY created_at DESC LIMIT ?3 OFFSET ?4"
-            )
+        let sql = if let Some(_s) = status {
+            "SELECT id, space_id, proposal_type, source_memory_ids, proposed_content, proposed_action, ai_model, confidence, status, reviewer_id, reviewed_at, review_feedback, created_at
+                 FROM ai_proposals WHERE space_id = ?1 AND status = ?2 ORDER BY created_at DESC LIMIT ?3 OFFSET ?4".to_string()
         } else {
-            format!(
-                "SELECT id, space_id, proposal_type, source_memory_ids, proposed_content, proposed_action, ai_model, confidence, status, reviewer_id, reviewed_at, review_feedback, created_at
-                 FROM ai_proposals WHERE space_id = ?1 ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
-            )
+            "SELECT id, space_id, proposal_type, source_memory_ids, proposed_content, proposed_action, ai_model, confidence, status, reviewer_id, reviewed_at, review_feedback, created_at
+                 FROM ai_proposals WHERE space_id = ?1 ORDER BY created_at DESC LIMIT ?2 OFFSET ?3".to_string()
         };
         let mut stmt = conn.prepare(&sql)?;
         let rows: Vec<_> = if let Some(s) = status {

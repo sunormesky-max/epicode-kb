@@ -4,7 +4,6 @@
 //! generates proposals via LLM, and supports approve/reject/modify/batch workflows.
 
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::db::DbPool;
 use crate::db::repository::ProposalRepo;
