@@ -1,6 +1,6 @@
 [package]
 name = "epicode-kb"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "epicode-kb: Enterprise knowledge base with memory provenance, hybrid search, real-time collaboration, and AI agent integration"
 license = "MIT"
