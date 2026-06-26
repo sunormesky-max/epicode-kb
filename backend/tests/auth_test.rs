@@ -1,14 +1,11 @@
 //! Tests for authentication, RBAC, and JWT.
 
-use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-};
+use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
 mod common;
 
-use epicode_kb::auth::model::{CreateLocalUserRequest, GlobalRole, LoginRequest, Permission, SpaceRole, User};
+use epicode_kb::auth::model::{CreateLocalUserRequest, GlobalRole, LoginRequest, Permission, SpaceRole};
 use epicode_kb::auth::rbac::{AuthContext, RbacEngine};
 use epicode_kb::auth::service::hash_api_key;
 
@@ -160,7 +157,7 @@ async fn test_auth_service_invalid_password_fails() {
 
 #[tokio::test]
 async fn test_auth_register_route_is_public() {
-    let (mut app, _state, _temp) = common::create_test_app().await;
+    let (app, _state, _temp) = common::create_test_app().await;
 
     let response = app
         .oneshot(
@@ -185,7 +182,7 @@ async fn test_auth_register_route_is_public() {
 
 #[tokio::test]
 async fn test_auth_login_route_is_public() {
-    let (mut app, state, _temp) = common::create_test_app().await;
+    let (app, state, _temp) = common::create_test_app().await;
 
     // Seed a user directly via the auth service.
     let req = CreateLocalUserRequest {

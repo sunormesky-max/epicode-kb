@@ -17,13 +17,15 @@ export default function SidePanel({ memoryId, editorContent }: SidePanelProps) {
   const fetchContext = useCallback(async () => {
     if (!editorContent || editorContent.length < 20) return
     try {
-      const r = await fetch(`/api/v1/collab/context?memory_id=${memoryId}&cursor=${encodeURIComponent(editorContent.slice(-200))}`)
-        .then(r => r.json())
+      const r = await fetch(
+        `/api/v1/collab/context?memory_id=${memoryId}&cursor=${encodeURIComponent(editorContent.slice(-200))}&space_id=sp_default`,
+        { headers: authHeaders() },
+      ).then((r) => r.json())
       if (r.code === 0 && r.data) {
         setRelated((r.data.related || []).slice(0, 5))
         setWarnings(r.data.warnings || [])
       }
-    } catch { /* debounce */ }
+    } catch { /* ignore — panel is non-blocking */ }
   }, [memoryId, editorContent])
 
   useEffect(() => {
@@ -93,4 +95,9 @@ export default function SidePanel({ memoryId, editorContent }: SidePanelProps) {
       </div>
     </div>
   )
+}
+
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('access_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }

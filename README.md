@@ -107,10 +107,10 @@ epicode-kb/
 | Sprint | 功能 | 状态 |
 |--------|------|------|
 | S1 | 记忆写入、文档上传、混合检索 | ✅ 已实现 |
-| S2 | RBAC 鉴权、知识图谱 | 🔶 规划中 |
-| S3 | AI 提议引擎、审核队列 | 🔶 规划中 |
-| S4 | 冲突检测与解决 | 📦 待规划 |
-| S5 | 知识健康度 | 📦 待规划 |
+| S2 | RBAC 鉴权、协同编辑、Agent/MCP | ✅ 已实现 |
+| S3 | AI 提议引擎、审核队列、反馈学习 | ✅ 已实现 |
+| S4 | 矛盾检测、冲突中心、图谱矛盾边、实时矛盾检测 | ✅ 已实现 |
+| S5 | 知识健康度、查询日志、通知系统 | ✅ 已实现 |
 
 ## API 概览
 
@@ -125,6 +125,13 @@ epicode-kb/
 | POST | /api/v1/memories/:id/trust | 调整信任 |
 | POST | /api/v1/memories/:id/adopt | 采纳 AI 记忆 |
 | POST | /api/v1/memories/:id/reject | 拒绝 AI 记忆 |
+| GET | /api/v1/proposals | AI 提议审核队列 |
+| POST | /api/v1/dream/scan | 触发空间扫描（含矛盾提议） |
+| GET | /api/v1/conflicts | 未解决矛盾列表 |
+| POST | /api/v1/conflicts/:id/resolve | 裁决矛盾 |
+| GET | /api/v1/graph | 知识图谱（节点 + 矛盾/相似边） |
+| GET | /api/v1/collab/context | 编辑器实时上下文召回 + 矛盾检测 |
+| GET | /api/v1/health/space/:id | 空间健康快照 |
 | GET | /api/v1/system/health | 健康检查 |
 | GET | /api/v1/system/version | 版本信息 |
 

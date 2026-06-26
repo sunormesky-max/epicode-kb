@@ -42,6 +42,7 @@ pub async fn create_test_app() -> (Router, Arc<AppState>, PathBuf) {
 }
 
 /// Build a JSON request body.
+#[allow(dead_code)]
 pub fn json_body(json: &str) -> Body {
     Body::from(json.to_string())
 }

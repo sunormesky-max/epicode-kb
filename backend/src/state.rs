@@ -98,9 +98,6 @@ impl AppState {
         // Initialize metrics
         let metrics = Arc::new(Metrics::new());
 
-        // Initialize proposal engine
-        let proposal_engine = Arc::new(ProposalEngine::new(db_pool.clone()));
-
         // Initialize conflict detector
         let conflict_detector = {
             let cc = ConflictConfig {
@@ -114,6 +111,13 @@ impl AppState {
                 cc,
             )))
         };
+
+        // Initialize proposal engine (wired to the conflict detector so dream
+        // cycle scans also surface knowledge contradictions as proposals).
+        let proposal_engine = Arc::new(ProposalEngine::new_with_conflict(
+            db_pool.clone(),
+            conflict_detector.clone().expect("conflict detector is always Some after init"),
+        ));
 
         // Initialize health scanner
         let health_scanner = Some(Arc::new(HealthScanner::new(db_pool.clone())));

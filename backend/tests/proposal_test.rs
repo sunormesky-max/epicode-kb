@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use epicode_kb::dream::proposal::{AiProposal, ProposalEngine, ProposalStatus, ProposalType};
+    use epicode_kb::dream::proposal::{ProposalEngine, ProposalStatus, ProposalType};
     use std::sync::Arc;
 
     fn create_test_db() -> Arc<std::sync::Mutex<rusqlite::Connection>> {

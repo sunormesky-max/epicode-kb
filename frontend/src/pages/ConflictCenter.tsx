@@ -19,7 +19,7 @@ export default function ConflictCenter() {
   const loadConflicts = async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${API}/conflicts`).then(r => r.json())
+      const r = await fetch(`${API}/conflicts?space_id=sp_default`, { headers: authHeaders() }).then(r => r.json())
       if (r.code === 0 && r.data) setConflicts(r.data)
     } catch { /* ignore */ }
     setLoading(false)
@@ -29,7 +29,7 @@ export default function ConflictCenter() {
     try {
       await fetch(`${API}/conflicts/${id}/resolve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ resolution }),
       })
       setConflicts(cs => cs.filter(c => c.id !== id))
@@ -98,4 +98,9 @@ export default function ConflictCenter() {
       )}
     </div>
   )
+}
+
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('access_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }

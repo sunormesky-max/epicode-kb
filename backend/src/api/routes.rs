@@ -92,6 +92,10 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         // Collaboration routes
         .route("/collab/:memory_id", get(crate::api::collab::collab_ws))
+        .route(
+            "/collab/context",
+            get(crate::api::collab::get_context),
+        )
         // MCP routes
         .route("/mcp/sse", get(crate::api::mcp::mcp_sse))
         .route(

@@ -252,6 +252,22 @@ impl MemoryRepo {
         Ok(())
     }
 
+    /// Replace the `provenance_meta` JSON blob for a memory.
+    pub fn set_provenance_meta(
+        conn: &Connection,
+        id: &str,
+        meta: &serde_json::Value,
+    ) -> AppResult<()> {
+        let affected = conn.execute(
+            "UPDATE memories SET provenance_meta = ?1 WHERE id = ?2",
+            params![meta.to_string(), id],
+        )?;
+        if affected == 0 {
+            return Err(AppError::not_found(format!("memory not found: {}", id)));
+        }
+        Ok(())
+    }
+
     /// Update memory visibility.
     pub fn update_visibility(
         conn: &Connection,

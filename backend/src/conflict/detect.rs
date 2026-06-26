@@ -37,8 +37,8 @@ impl ConflictDetector {
             .lock()
             .map_err(|e| crate::error::AppError::internal(format!("db lock: {}", e)))?;
 
-        // Fetch the target memory
-        let target = crate::db::repository::MemoryRepo::get_by_id(&conn, memory_id)?;
+        // Fetch the target memory (with embedding — required for comparison).
+        let target = crate::db::repository::MemoryRepo::get_by_id_with_embedding(&conn, memory_id)?;
 
         let embedding = target
             .embedding
@@ -72,27 +72,16 @@ impl ConflictDetector {
                 continue;
             }
 
-            let words_a: std::collections::HashSet<&str> =
-                target.content.split_whitespace().collect();
-            let words_b: std::collections::HashSet<&str> =
-                cand_content.split_whitespace().collect();
-            let intersection = words_a.intersection(&words_b).count();
-            let union = words_a.union(&words_b).count();
-            let jaccard = if union > 0 {
-                intersection as f32 / union as f32
-            } else {
-                0.0
-            };
-
-            let contradiction_score = (1.0 - jaccard) * (1.0 - semantic_distance);
-            if contradiction_score > 0.3 {
+            let jaccard = jaccard_similarity(&target.content, cand_content);
+            let score = contradiction_score(semantic_distance, jaccard);
+            if score > CONTRADICTION_THRESHOLD {
                 conflicts.push(ConflictCandidate {
                     memory_a_id: target.id.clone(),
                     memory_b_id: cand_id.clone(),
                     content_a: target.content.clone(),
                     content_b: cand_content.clone(),
                     semantic_distance,
-                    confidence: contradiction_score,
+                    confidence: score,
                     summary: format!(
                         "Potential contradiction detected (semantic dist={:.3}, Jaccard={:.3})",
                         semantic_distance, jaccard
@@ -111,23 +100,29 @@ impl ConflictDetector {
 
     /// Scan all memories in a space for contradictions.
     pub fn detect_all(&self, space_id: &str) -> AppResult<Vec<ConflictCandidate>> {
-        let conn = self
-            .db
-            .lock()
-            .map_err(|e| crate::error::AppError::internal(format!("db lock: {}", e)))?;
+        // Collect memory ids first, then release the lock before calling
+        // detect_one (which acquires the same lock) to avoid a self-deadlock.
+        let memory_ids: Vec<String> = {
+            let conn = self
+                .db
+                .lock()
+                .map_err(|e| crate::error::AppError::internal(format!("db lock: {}", e)))?;
 
-        // Get all reviewed memories in the space
-        let mut stmt = conn
-            .prepare(
-                "SELECT id FROM memories WHERE space_id = ?1 AND review_status = 'accepted' AND embedding IS NOT NULL LIMIT 200",
-            )
-            .map_err(crate::error::AppError::db)?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id FROM memories WHERE space_id = ?1 AND review_status = 'accepted' AND embedding IS NOT NULL LIMIT 200",
+                )
+                .map_err(crate::error::AppError::db)?;
 
-        let memory_ids: Vec<String> = stmt
-            .query_map(rusqlite::params![space_id], |row| row.get(0))
-            .map_err(crate::error::AppError::db)?
-            .filter_map(|r| r.ok())
-            .collect();
+            let rows = stmt
+                .query_map(rusqlite::params![space_id], |row| row.get::<_, String>(0))
+                .map_err(crate::error::AppError::db)?;
+            let mut ids = Vec::new();
+            for r in rows.flatten() {
+                ids.push(r);
+            }
+            ids
+        };
 
         let mut all_conflicts = Vec::new();
         for mid in &memory_ids {
@@ -199,7 +194,7 @@ impl ConflictDetector {
 }
 
 /// Compute cosine similarity between two float vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let mut dot = 0.0;
     let mut norm_a = 0.0;
     let mut norm_b = 0.0;
@@ -211,3 +206,24 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let denom = (norm_a * norm_b).sqrt();
     if denom == 0.0 { 0.0 } else { dot / denom }
 }
+
+/// Word-overlap (Jaccard) similarity between two text snippets.
+pub(crate) fn jaccard_similarity(a: &str, b: &str) -> f32 {
+    let words_a: std::collections::HashSet<&str> = a.split_whitespace().collect();
+    let words_b: std::collections::HashSet<&str> = b.split_whitespace().collect();
+    let union = words_a.union(&words_b).count();
+    if union == 0 {
+        return 0.0;
+    }
+    let intersection = words_a.intersection(&words_b).count();
+    intersection as f32 / union as f32
+}
+
+/// Heuristic contradiction score in [0,1]: high when two snippets are
+/// semantically close (small distance) but lexically divergent (low Jaccard).
+pub(crate) fn contradiction_score(semantic_distance: f32, jaccard: f32) -> f32 {
+    (1.0 - jaccard) * (1.0 - semantic_distance)
+}
+
+/// Default contradiction threshold above which a pair is flagged as a conflict.
+pub(crate) const CONTRADICTION_THRESHOLD: f32 = 0.3;

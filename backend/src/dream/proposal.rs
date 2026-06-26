@@ -3,8 +3,11 @@
 //! The Proposal Engine scans a memory space to detect merge/link/stale/conflict candidates,
 //! generates proposals via LLM, and supports approve/reject/modify/batch workflows.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
+use crate::conflict::detect::ConflictDetector;
 use crate::db::DbPool;
 use crate::db::repository::ProposalRepo;
 use crate::error::{AppError, AppResult};
@@ -59,11 +62,24 @@ pub struct BatchAction {
 /// Proposal engine — scans spaces and manages AI proposal lifecycle.
 pub struct ProposalEngine {
     db: DbPool,
+    conflict_detector: Option<Arc<ConflictDetector>>,
 }
 
 impl ProposalEngine {
     pub fn new(db: DbPool) -> Self {
-        Self { db }
+        Self {
+            db,
+            conflict_detector: None,
+        }
+    }
+
+    /// Construct an engine wired to a conflict detector so `scan_space`
+    /// also emits `Conflict` proposals for detected knowledge contradictions.
+    pub fn new_with_conflict(db: DbPool, detector: Arc<ConflictDetector>) -> Self {
+        Self {
+            db,
+            conflict_detector: Some(detector),
+        }
     }
 
     /// List proposals with pagination.
@@ -171,6 +187,70 @@ impl ProposalEngine {
             }
         }
 
+        // ---- Conflict candidates: semantic contradictions across the space ----
+        // Delegates to the (optional) ConflictDetector, which needs its own DB
+        // lock, so we release the current connection before scanning.
+        if let Some(detector) = &self.conflict_detector {
+            let existing_pairs = Self::collect_existing_conflict_pairs(&conn, space_id)?;
+
+            // Release the lock before the detector acquires its own.
+            drop(conn);
+
+            let candidates = match detector.detect_all(space_id) {
+                Ok(cs) => cs,
+                Err(e) => {
+                    tracing::warn!("Conflict scan failed for space {}: {}", space_id, e);
+                    Vec::new()
+                }
+            };
+
+            let conn = self
+                .db
+                .lock()
+                .map_err(|e| AppError::internal(format!("db lock: {}", e)))?;
+
+            for cand in &candidates {
+                // Dedup: skip if a pending conflict proposal already covers this pair.
+                let pair_key = pair_key(&cand.memory_a_id, &cand.memory_b_id);
+                if existing_pairs.contains(&pair_key) {
+                    continue;
+                }
+                proposals.push(AiProposal {
+                    id: Self::new_id(),
+                    space_id: space_id.to_string(),
+                    proposal_type: ProposalType::Conflict,
+                    source_memory_ids: vec![cand.memory_a_id.clone(), cand.memory_b_id.clone()],
+                    proposed_content: Some(cand.summary.clone()),
+                    proposed_action: Some(serde_json::json!({
+                        "semantic_distance": cand.semantic_distance,
+                        "confidence": cand.confidence,
+                        "content_a": cand.content_a,
+                        "content_b": cand.content_b,
+                    })),
+                    ai_model: Some("heuristic-conflict".into()),
+                    confidence: Some(cand.confidence),
+                    status: ProposalStatus::Pending,
+                    reviewer_id: None,
+                    reviewed_at: None,
+                    review_feedback: None,
+                    created_at: now,
+                });
+            }
+
+            // Persist proposals
+            for p in &proposals {
+                ProposalRepo::insert(&conn, p)?;
+            }
+
+            tracing::info!(
+                "Proposal scan for space {} generated {} proposals ({} conflict candidates detected)",
+                space_id,
+                proposals.len(),
+                candidates.len()
+            );
+            return Ok(proposals);
+        }
+
         // Persist proposals
         for p in &proposals {
             ProposalRepo::insert(&conn, p)?;
@@ -182,6 +262,34 @@ impl ProposalEngine {
             proposals.len()
         );
         Ok(proposals)
+    }
+
+    /// Collect the set of normalized memory-pair keys already covered by
+    /// pending conflict proposals, so we don't emit duplicates.
+    fn collect_existing_conflict_pairs(
+        conn: &rusqlite::Connection,
+        space_id: &str,
+    ) -> AppResult<std::collections::HashSet<String>> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT source_memory_ids FROM ai_proposals
+                 WHERE space_id = ?1 AND proposal_type = 'conflict' AND status = 'pending'",
+            )
+            .map_err(AppError::db)?;
+        let rows: Vec<String> = stmt
+            .query_map(rusqlite::params![space_id], |row| row.get(0))
+            .map_err(AppError::db)?
+            .filter_map(|r| r.ok())
+            .collect();
+        let mut set = std::collections::HashSet::new();
+        for raw in &rows {
+            if let Ok(ids) = serde_json::from_str::<Vec<String>>(raw) {
+                if let (Some(a), Some(b)) = (ids.first(), ids.get(1)) {
+                    set.insert(pair_key(a, b));
+                }
+            }
+        }
+        Ok(set)
     }
 
     /// Approve a proposal and execute its action.
@@ -302,5 +410,15 @@ impl ProposalEngine {
             }
         }
         Ok(results)
+    }
+}
+
+/// Build a normalized, order-independent key for a memory pair so the same
+/// contradiction is not proposed twice regardless of memory ordering.
+fn pair_key(a: &str, b: &str) -> String {
+    if a <= b {
+        format!("{}|{}", a, b)
+    } else {
+        format!("{}|{}", b, a)
     }
 }

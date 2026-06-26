@@ -624,4 +624,47 @@ HealthSnapshotNotFound = 40412,
 
 ---
 
+## 10. v0.3.0 收尾实现（PRD ⚠️ 补全）
+
+> 本节记录 v0.3.0 审计遗留的 3 个 ⚠️ 项 + 2 个既有 bug 的最终实现（2026-06-26）。
+
+### 10.1 P3-5：dream cycle 全空间矛盾扫描接入
+
+`ProposalEngine` 新增 `new_with_conflict(db, detector)` 构造器，持有 `Option<Arc<ConflictDetector>>`。`scan_space` 在生成 merge/archive 提议后，委托 detector 执行 `detect_all`，将每个矛盾候选转为 `ProposalType::Conflict` 提议入审核队列。
+
+- **去重**：`pair_key(a,b)` 归一化记忆对，跳过已有 pending conflict 提议的重复对（`collect_existing_conflict_pairs`）。
+- **锁安全**：调用 `detect_all` 前显式 `drop(conn)`，因 detector 内部自取锁。
+
+### 10.2 P3-4：知识图谱矛盾边
+
+- **后端** `GET /api/v1/graph?space_id=`：节点=accepted 记忆；矛盾边=解析 conflict 记忆 `provenance_meta.conflicting_ids`；相似边=Jaccard>0.6 的内容对。
+- **前端** `Graph.tsx`：reactflow 渲染，矛盾边红色虚线+动画，相似边灰色实线，点击节点高亮关联边，带 MiniMap/Controls/图例。
+
+### 10.3 P5-2：编辑器实时矛盾检测
+
+- **后端** `GET /api/v1/collab/context?memory_id=&cursor=&space_id=`：embed cursor → 与同空间 accepted 记忆算 cosine 取 top-5 为 `related`；对语义距离≤0.3 且词差异大的记忆算 contradiction_score>0.3 入 `warnings`。
+- **前端** `MemoryEditor` 接入 `SidePanel`（flex 行布局），SidePanel fetch 时带 `Authorization` + `space_id`，3s debounce。
+
+### 10.4 修复：冲突中心端点真实实现
+
+`GET /conflicts` 改为查 `provenance='conflict' AND review_status='pending'` 记忆，解析 `conflicting_ids` 输出双方内容；`POST /conflicts/:id/resolve` 将裁决记入 `provenance_meta` 并标记 resolved（新增 `MemoryRepo::set_provenance_meta`）。前端补 auth header。
+
+### 10.5 修复的 v0.3.0 既有 bug
+
+| Bug | 位置 | 影响 | 修复 |
+|-----|------|------|------|
+| `detect_all` 嵌套锁死锁 | `conflict/detect.rs` | 全空间扫描永久阻塞（从未被调用过故未暴露） | 收集 id 后 `drop(conn)` 再逐个 `detect_one` |
+| `detect_one` 取错 embedding | `conflict/detect.rs` | 用 `get_by_id`（embedding 恒为 None）→ 永远报"no embedding" | 改用 `get_by_id_with_embedding` |
+
+### 10.6 启发式提取为可复用函数
+
+矛盾判定逻辑从 `detect_one` 内联提取为 `conflict::detect` 模块的 `pub(crate)` 辅助函数，供 graph/collab 复用：
+
+- `cosine_similarity(a, b)` — 余弦相似度
+- `jaccard_similarity(a, b)` — 词重叠相似度
+- `contradiction_score(sem_dist, jaccard)` — 矛盾分 (1-Jaccard)·(1-dist)
+- `CONTRADICTION_THRESHOLD = 0.3` — 判定阈值常量
+
+---
+
 > **本文档为 epicode-kb v0.3.0 增量架构设计，聚焦 P2/P3/P4/P5 四个 Phase 的实现方案与任务分解。详细接口实现以各任务代码与单元测试为准。**

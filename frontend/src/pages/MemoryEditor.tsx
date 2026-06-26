@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import SidePanel from '../components/SidePanel'
 
 interface Memory {
   id: string
@@ -44,25 +45,28 @@ export default function MemoryEditor() {
   }
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">Edit Memory</h1>
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <textarea
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          rows={16}
-          className="w-full rounded border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 font-mono"
-        />
-        <div className="flex justify-end">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 disabled:opacity-50"
-          >
-            {saving ? 'Saving...' : 'Save Version'}
-          </button>
+    <div className="flex gap-4 h-full">
+      <div className="flex-1 p-8 max-w-4xl mx-auto">
+        <h1 className="text-2xl font-bold mb-6">Edit Memory</h1>
+        <div className="bg-white rounded-lg shadow p-6 space-y-4">
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            rows={16}
+            className="w-full rounded border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 font-mono"
+          />
+          <div className="flex justify-end">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 disabled:opacity-50"
+            >
+              {saving ? 'Saving...' : 'Save Version'}
+            </button>
+          </div>
         </div>
       </div>
+      {id && <SidePanel memoryId={id} editorContent={content} />}
     </div>
   )
 }
