@@ -3,16 +3,18 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::ws::WebSocket;
+use axum::extract::ws::Message;
 use rusqlite::Connection;
+use tokio::sync::mpsc::UnboundedSender;
 use yrs::updates::decoder::Decode;
-use yrs::{
-    updates::encoder::Encode, Doc, GetString, ReadTxn, StateVector, Text, Transact, Update,
-    WriteTxn,
-};
+use yrs::updates::encoder::Encode;
+use yrs::{Doc, GetString, ReadTxn, StateVector, Text, Transact, Update, WriteTxn};
 
 use crate::db::repository::MemoryRepo;
 use crate::error::{AppError, AppResult};
+
+/// A subscriber is identified by a unique id and an outbound channel.
+pub type Subscriber = (u64, UnboundedSender<Message>);
 
 /// Manager holding all active collaboration rooms.
 pub struct RoomManager {
@@ -35,7 +37,6 @@ impl RoomManager {
         if let Some(room) = rooms.get(memory_id) {
             return Ok(room.clone());
         }
-
         let room = Arc::new(Mutex::new(CollaborationRoom::new(
             memory_id.to_string(),
             self.db.clone(),
@@ -46,20 +47,21 @@ impl RoomManager {
 }
 
 /// A single collaboration room backed by a yrs document.
+///
+/// Awareness is forwarded opaquely (raw bytes) rather than parsed server-side,
+/// because `yrs::sync::awareness::Awareness` is not `Send`/`Sync` and cannot
+/// live behind a shared `Arc<Mutex<..>>` across async tasks.
 pub struct CollaborationRoom {
     memory_id: String,
     doc: Doc,
-    #[allow(dead_code)]
-    db: Arc<Mutex<Connection>>,
-    subscribers: Vec<WebSocket>,
+    subscribers: Vec<Subscriber>,
+    next_sub_id: u64,
 }
 
 impl CollaborationRoom {
     /// Create a new collaboration room, loading existing memory content as initial state.
     pub fn new(memory_id: String, db: Arc<Mutex<Connection>>) -> AppResult<Self> {
         let doc = Doc::new();
-
-        // Load existing content into the document.
         let conn = db.lock().unwrap();
         if let Ok(memory) = MemoryRepo::get_by_id(&conn, &memory_id) {
             let mut txn = doc.transact_mut();
@@ -68,13 +70,17 @@ impl CollaborationRoom {
             drop(txn);
         }
         drop(conn);
-
         Ok(Self {
             memory_id,
             doc,
-            db,
             subscribers: Vec::new(),
+            next_sub_id: 1,
         })
+    }
+
+    /// Borrow the underlying yrs document.
+    pub fn doc(&self) -> &Doc {
+        &self.doc
     }
 
     /// Apply a yrs update to the document.
@@ -111,9 +117,32 @@ impl CollaborationRoom {
         Ok(txn.encode_diff_v1(&sv))
     }
 
-    /// Add a websocket subscriber.
-    pub fn add_subscriber(&mut self, socket: WebSocket) {
-        self.subscribers.push(socket);
+    /// Register a subscriber; returns its unique id.
+    pub fn add_subscriber(&mut self, sender: UnboundedSender<Message>) -> u64 {
+        let id = self.next_sub_id;
+        self.next_sub_id += 1;
+        self.subscribers.push((id, sender));
+        id
+    }
+
+    /// Remove a subscriber by id.
+    pub fn remove_subscriber(&mut self, id: u64) {
+        self.subscribers.retain(|(sid, _)| *sid != id);
+    }
+
+    /// Broadcast a raw message to all subscribers except `exclude`.
+    pub fn broadcast(&self, payload: Vec<u8>, exclude: Option<u64>) {
+        for (id, sender) in &self.subscribers {
+            if Some(*id) == exclude {
+                continue;
+            }
+            let _ = sender.send(Message::Binary(payload.clone()));
+        }
+    }
+
+    /// Current number of subscribers.
+    pub fn subscriber_count(&self) -> usize {
+        self.subscribers.len()
     }
 
     /// Get the memory_id.

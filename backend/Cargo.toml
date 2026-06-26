@@ -17,6 +17,7 @@ path = "src/main.rs"
 # Web framework
 axum = { version = "0.7", features = ["multipart", "macros", "ws"] }
 tokio = { version = "1", features = ["full"] }
+futures = "0.3"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 

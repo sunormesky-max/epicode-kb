@@ -10,7 +10,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::auth::model::Actor;
-use crate::collab::protocol::CollabMessage;
 use crate::conflict::detect::{contradiction_score, cosine_similarity, jaccard_similarity, CONTRADICTION_THRESHOLD};
 use crate::error::AppError;
 use crate::state::AppState;
@@ -160,7 +159,7 @@ pub async fn get_context(
     })))
 }
 
-/// WebSocket handler for /api/v1/collab/:memory_id.
+/// WebSocket handler for /api/v1/collab/:memory_id (standard yjs protocol).
 pub async fn collab_ws(
     State(state): State<Arc<AppState>>,
     Extension(_actor): Extension<Actor>,
@@ -170,21 +169,121 @@ pub async fn collab_ws(
     let room_manager = state.room_manager.clone();
     let room = room_manager.get_or_create(&memory_id)?;
 
-    Ok(ws.on_upgrade(move |mut socket| async move {
-        // Send initial sync step 1 with server state vector.
-        let state_vector = {
-            let room_guard = room.lock().unwrap();
-            room_guard.state_vector()
-        };
-        let msg = CollabMessage::SyncStep1(state_vector);
-        let _ = socket
-            .send(axum::extract::ws::Message::Binary(msg.encode()))
-            .await;
-
-        // Add socket as subscriber and handle incoming messages.
-        {
-            let mut room_guard = room.lock().unwrap();
-            room_guard.add_subscriber(socket);
+    Ok(ws.on_upgrade(move |socket| async move {
+        if let Err(e) = handle_collab_socket(socket, room).await {
+            tracing::warn!("collab socket error for {}: {}", memory_id, e);
         }
     }))
+}
+
+/// Drive a single WebSocket connection through the standard yjs sync protocol.
+async fn handle_collab_socket(
+    socket: axum::extract::ws::WebSocket,
+    room: Arc<std::sync::Mutex<crate::collab::room::CollaborationRoom>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use axum::extract::ws::Message;
+    use futures::{SinkExt, StreamExt};
+    use tokio::sync::mpsc;
+    use yrs::sync::protocol::{Message as YMessage, SyncMessage};
+
+    let (mut ws_sink, mut ws_stream) = socket.split();
+
+    // Outbound channel: room broadcasts push Message here; a writer task drains it.
+    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    let sub_id = {
+        let mut room_guard = room.lock().unwrap();
+        room_guard.add_subscriber(tx)
+    };
+
+    // Server-initiated sync step 1: send our state vector to the new client.
+    let init_frame = {
+        let room_guard = room.lock().unwrap();
+        let sv = room_guard.state_vector();
+        crate::collab::protocol::sync_step1(&sv)
+    };
+    let _ = ws_sink.send(Message::Binary(init_frame)).await;
+
+    // Writer task: drain the broadcast channel into the socket.
+    let writer = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if ws_sink.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Reader loop: socket → process standard yjs messages.
+    while let Some(msg) = ws_stream.next().await {
+        let msg = match msg {
+            Ok(m) => m,
+            Err(_) => break,
+        };
+        let payload: Vec<u8> = match msg {
+            Message::Binary(b) => b,
+            Message::Text(t) => t.into_bytes(),
+            Message::Ping(_) | Message::Pong(_) | Message::Close(_) => continue,
+        };
+
+        let ymsg = match crate::collab::protocol::read_message(&payload) {
+            Some(m) => m,
+            None => {
+                tracing::debug!("collab: dropping undecodable message");
+                continue;
+            }
+        };
+
+        match ymsg {
+            YMessage::Sync(sync_msg) => match sync_msg {
+                SyncMessage::SyncStep1(remote_sv) => {
+                    // Client asks for our diff: reply SyncStep2 to it directly.
+                    let sv_bytes = yrs::updates::encoder::Encode::encode_v1(&remote_sv);
+                    let diff = {
+                        let room_guard = room.lock().unwrap();
+                        room_guard.diff_update(&sv_bytes).unwrap_or_default()
+                    };
+                    let frame = crate::collab::protocol::sync_step2(diff);
+                    let _ = room.lock().unwrap().broadcast(frame, Some(sub_id));
+                    // Also request the client's state so we converge.
+                    let sv = {
+                        let room_guard = room.lock().unwrap();
+                        room_guard.state_vector()
+                    };
+                    let req = crate::collab::protocol::sync_step1(&sv);
+                    let _ = room.lock().unwrap().broadcast(req, Some(sub_id));
+                }
+                SyncMessage::SyncStep2(_) => {
+                    // Client's missing diff for us; nothing to broadcast.
+                }
+                SyncMessage::Update(update) => {
+                    // Apply locally then re-broadcast the original Update frame to others.
+                    let frame = payload.clone();
+                    {
+                        let mut room_guard = room.lock().unwrap();
+                        let _ = room_guard.apply_update(&update);
+                        room_guard.broadcast(frame, Some(sub_id));
+                    }
+                }
+            },
+            YMessage::AwarenessQuery => {
+                // Client wants full awareness: nothing to synthesize server-side
+                // (we forward awareness opaquely). No-op; clients exchange
+                // awareness updates directly via broadcast below.
+            }
+            YMessage::Awareness(_au) => {
+                // Client awareness update: forward raw bytes to other subscribers.
+                // We don't maintain a server-side Awareness (it isn't Send/Sync);
+                // clients each track awareness and reconcile.
+                let _ = room
+                    .lock()
+                    .unwrap()
+                    .broadcast(payload, Some(sub_id));
+            }
+            _ => {}
+        }
+    }
+
+    // Cleanup: remove subscriber, drop writer.
+    room.lock().unwrap().remove_subscriber(sub_id);
+    writer.abort();
+    Ok(())
 }

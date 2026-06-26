@@ -1,29 +1,26 @@
-//! Tests for collaboration protocol and room state.
+//! Tests for the collaboration protocol (standard yjs sync format).
 
-use epicode_kb::collab::protocol::CollabMessage;
+use epicode_kb::collab::protocol::{read_message, write_message};
+use yrs::sync::protocol::{Message, SyncMessage};
+use yrs::StateVector;
 
 #[test]
-fn test_collab_message_roundtrip() {
-    let messages = vec![
-        CollabMessage::SyncStep1(vec![1, 2, 3]),
-        CollabMessage::SyncStep2(vec![4, 5, 6]),
-        CollabMessage::Update(vec![7, 8, 9]),
-        CollabMessage::Awareness(vec![10, 11, 12]),
-    ];
-
-    for msg in messages {
-        let encoded = msg.encode();
-        let parsed = CollabMessage::parse(&encoded).expect("parse should succeed");
-        assert_eq!(format!("{:?}", msg), format!("{:?}", parsed));
-    }
+fn test_sync_step1_roundtrip() {
+    let msg = Message::Sync(SyncMessage::SyncStep1(StateVector::default()));
+    let encoded = write_message(&msg);
+    let decoded = read_message(&encoded).expect("decode should succeed");
+    assert_eq!(msg, decoded);
 }
 
 #[test]
-fn test_collab_message_parse_empty_returns_none() {
-    assert!(CollabMessage::parse(&[]).is_none());
+fn test_sync_update_roundtrip() {
+    let msg = Message::Sync(SyncMessage::Update(vec![1, 2, 3, 4]));
+    let encoded = write_message(&msg);
+    let decoded = read_message(&encoded).expect("decode should succeed");
+    assert_eq!(msg, decoded);
 }
 
 #[test]
-fn test_collab_message_parse_unknown_kind_returns_none() {
-    assert!(CollabMessage::parse(&[99, 1, 2, 3]).is_none());
+fn test_read_message_garbage_returns_none() {
+    assert!(read_message(&[0xFF, 0xFF]).is_none());
 }

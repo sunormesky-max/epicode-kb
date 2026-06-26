@@ -20,6 +20,43 @@ fn extract_bearer(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+/// Extract a JWT from the `?token=` query param (used by WebSocket clients
+/// like y-websocket, which cannot set custom headers on the upgrade request).
+fn extract_query_token(uri: &axum::http::Uri) -> Option<String> {
+    let query = uri.query()?;
+    for pair in query.split('&') {
+        let mut kv = pair.splitn(2, '=');
+        if kv.next() == Some("token") {
+            if let Some(v) = kv.next() {
+                return Some(percent_decode(v));
+            }
+        }
+    }
+    None
+}
+
+/// Minimal percent-decoding for the token query value.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(
+                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
+                16,
+            ) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
 /// Extract agent API key from headers.
 fn extract_agent_api_key(headers: &HeaderMap) -> Option<String> {
     headers
@@ -73,8 +110,9 @@ pub async fn auth_middleware(
         }
     }
 
-    // Try JWT bearer token.
-    if let Some(token) = extract_bearer(headers) {
+    // Try JWT bearer token (header, or ?token= query for WebSocket clients).
+    let bearer = extract_bearer(headers).or_else(|| extract_query_token(req.uri()));
+    if let Some(token) = bearer {
         match state.auth_service.verify_access_token(&token) {
             Ok(user) => {
                 let space_role = {
