@@ -5,6 +5,8 @@ const navItems = [
   { path: '/upload', label: 'Upload' },
   { path: '/search', label: 'Search' },
   { path: '/review', label: 'Review' },
+  { path: '/conflicts', label: 'Conflicts' },
+  { path: '/health', label: 'Health' },
   { path: '/graph', label: 'Graph' },
 ]
 
@@ -18,7 +20,7 @@ export default function Layout() {
             <span className="text-2xl">🧠</span>
             epicode-kb
           </h1>
-          <p className="text-xs text-slate-400 mt-1">v0.1.0</p>
+          <p className="text-xs text-slate-400 mt-1">v0.3.0</p>
         </div>
         <nav className="px-3">
           {navItems.map((item) => (

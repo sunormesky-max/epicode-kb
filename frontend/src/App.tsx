@@ -10,6 +10,8 @@ import AdminConsole from './pages/AdminConsole'
 import SpaceSettings from './pages/SpaceSettings'
 import MemoryEditor from './pages/MemoryEditor'
 import AgentIntegration from './pages/AgentIntegration'
+import HealthDashboard from './pages/HealthDashboard'
+import ConflictCenter from './pages/ConflictCenter'
 
 export default function App() {
   return (
@@ -20,6 +22,8 @@ export default function App() {
           <Route path="/upload" element={<Upload />} />
           <Route path="/search" element={<Search />} />
           <Route path="/review" element={<Review />} />
+          <Route path="/conflicts" element={<ConflictCenter />} />
+          <Route path="/health" element={<HealthDashboard />} />
           <Route path="/graph" element={<Graph />} />
           <Route path="/spaces/:id/settings" element={<SpaceSettings />} />
           <Route path="/memories/:id/edit" element={<MemoryEditor />} />
