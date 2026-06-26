@@ -595,7 +595,7 @@ impl MemoryService {
         let mut doc = TantivyDocument::new();
         doc.add_text(schema.memory_id, &memory.id);
         doc.add_text(schema.space_id, &memory.space_id);
-        doc.add_text(schema.content, &crate::memory::html::strip_tags(&memory.content));
+        doc.add_text(schema.content, crate::memory::html::strip_tags(&memory.content));
         doc.add_text(schema.provenance, memory.provenance.as_str());
         doc.add_text(schema.review_status, memory.review_status.as_str());
         doc.add_text(schema.visibility, memory.visibility.as_str());
@@ -615,7 +615,7 @@ impl MemoryService {
         let mut doc = TantivyDocument::new();
         doc.add_text(schema.memory_id, &memory.id);
         doc.add_text(schema.space_id, &memory.space_id);
-        doc.add_text(schema.content, &crate::memory::html::strip_tags(&memory.content));
+        doc.add_text(schema.content, crate::memory::html::strip_tags(&memory.content));
         doc.add_text(schema.provenance, memory.provenance.as_str());
         doc.add_text(schema.review_status, memory.review_status.as_str());
         doc.add_text(schema.visibility, memory.visibility.as_str());

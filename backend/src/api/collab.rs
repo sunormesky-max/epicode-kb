@@ -242,14 +242,14 @@ async fn handle_collab_socket(
                         room_guard.diff_update(&sv_bytes).unwrap_or_default()
                     };
                     let frame = crate::collab::protocol::sync_step2(diff);
-                    let _ = room.lock().unwrap().broadcast(frame, Some(sub_id));
+                    room.lock().unwrap().broadcast(frame, Some(sub_id));
                     // Also request the client's state so we converge.
                     let sv = {
                         let room_guard = room.lock().unwrap();
                         room_guard.state_vector()
                     };
                     let req = crate::collab::protocol::sync_step1(&sv);
-                    let _ = room.lock().unwrap().broadcast(req, Some(sub_id));
+                    room.lock().unwrap().broadcast(req, Some(sub_id));
                 }
                 SyncMessage::SyncStep2(_) => {
                     // Client's missing diff for us; nothing to broadcast.
@@ -273,10 +273,7 @@ async fn handle_collab_socket(
                 // Client awareness update: forward raw bytes to other subscribers.
                 // We don't maintain a server-side Awareness (it isn't Send/Sync);
                 // clients each track awareness and reconcile.
-                let _ = room
-                    .lock()
-                    .unwrap()
-                    .broadcast(payload, Some(sub_id));
+                room.lock().unwrap().broadcast(payload, Some(sub_id));
             }
             _ => {}
         }
