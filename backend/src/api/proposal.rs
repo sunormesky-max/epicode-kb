@@ -1,7 +1,7 @@
 //! Proposal API endpoints — review queue, approve, reject, modify, batch.
 
 use axum::{extract::{Path, Query, State}, Json};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::dream::proposal::BatchAction;
@@ -37,14 +37,7 @@ pub struct ScanBody {
     pub space_id: String,
 }
 
-#[derive(Debug, Serialize)]
-struct ApiResponse<T: Serialize> {
-    code: i32,
-    data: T,
-    message: String,
-}
-
-fn ok_response<T: Serialize>(data: T) -> Json<serde_json::Value> {
+fn ok_response<T: serde::Serialize>(data: T) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "code": 0,
         "data": data,

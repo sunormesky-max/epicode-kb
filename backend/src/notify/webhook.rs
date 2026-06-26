@@ -33,8 +33,8 @@ impl Notifier for WebhookNotifier {
             .map_err(|e| AppError::internal(format!("json serialize: {}", e)))?;
 
         // Compute HMAC-SHA256 signature
-        use sha2::{Sha256, Digest};
         use hmac::{Hmac, Mac};
+        use sha2::Sha256;
         type HmacSha256 = Hmac<Sha256>;
 
         let mut mac = HmacSha256::new_from_slice(self.secret.as_bytes())

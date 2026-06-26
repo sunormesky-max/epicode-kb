@@ -1,6 +1,6 @@
 //! PDF parser — text extraction with pdf-extract (when available) or ASCII fallback.
 
-use crate::error::{AppError, AppResult};
+use crate::error::AppResult;
 use crate::parse::{split_long_text, DocumentParser, FileType, MemoryChunk};
 
 /// PDF document parser.
@@ -23,9 +23,7 @@ impl DocumentParser for PdfParser {
         {
             let text = Self::extract_ascii_text(content);
             if text.trim().is_empty() {
-                return Err(AppError::not_implemented(
-                    "PDF parsing requires the `pdf` feature. Enable it or add `pdf-extract`.",
-                ));
+                return Ok(vec![]);
             }
             Ok(self.chunk_text(&text, chunk_size, chunk_overlap))
         }

@@ -12,6 +12,7 @@ use super::model::{ConflictCandidate, ConflictConfig};
 /// Detects knowledge contradictions between memories.
 pub struct ConflictDetector {
     db: DbPool,
+    #[allow(dead_code)]
     embedder: Arc<dyn EmbeddingProvider>,
     config: ConflictConfig,
 }
@@ -58,7 +59,7 @@ impl ConflictDetector {
             .collect();
 
         let mut conflicts = Vec::new();
-        let target_vec: Vec<f32> = embedding.iter().copied().collect();
+        let target_vec: Vec<f32> = embedding.to_vec();
 
         for (cand_id, cand_content, cand_blob) in &rows {
             let cand_emb: Vec<f32> = crate::db::repository::blob_to_embedding(cand_blob);
