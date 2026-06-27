@@ -203,6 +203,15 @@ async fn handle_collab_socket(
     };
     let _ = ws_sink.send(Message::Binary(init_frame)).await;
 
+    // Replay last-seen awareness to the new client so it learns existing peers.
+    let awareness_frame = {
+        let room_guard = room.lock().unwrap();
+        room_guard.last_awareness().map(|b| b.to_vec())
+    };
+    if let Some(frame) = awareness_frame {
+        let _ = ws_sink.send(Message::Binary(frame)).await;
+    }
+
     // Writer task: drain the broadcast channel into the socket.
     let writer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -225,9 +234,17 @@ async fn handle_collab_socket(
         };
 
         let ymsg = match crate::collab::protocol::read_message(&payload) {
-            Some(m) => m,
+            Some(m) => {
+                tracing::debug!("collab recv msg variant: {}", msg_variant_name(&m));
+                m
+            }
             None => {
-                tracing::debug!("collab: dropping undecodable message");
+                let hex: String = payload.iter().map(|b| format!("{:02x}", b)).collect();
+                tracing::warn!(
+                    "collab: dropping undecodable message ({} bytes): {}",
+                    payload.len(),
+                    hex
+                );
                 continue;
             }
         };
@@ -235,21 +252,16 @@ async fn handle_collab_socket(
         match ymsg {
             YMessage::Sync(sync_msg) => match sync_msg {
                 SyncMessage::SyncStep1(remote_sv) => {
-                    // Client asks for our diff: reply SyncStep2 to it directly.
+                    // Client asks for our diff: reply SyncStep2. We broadcast to
+                    // ALL subscribers (exclude None) because the requester must
+                    // receive it, and others simply ignore content they already have.
                     let sv_bytes = yrs::updates::encoder::Encode::encode_v1(&remote_sv);
                     let diff = {
                         let room_guard = room.lock().unwrap();
                         room_guard.diff_update(&sv_bytes).unwrap_or_default()
                     };
                     let frame = crate::collab::protocol::sync_step2(diff);
-                    room.lock().unwrap().broadcast(frame, Some(sub_id));
-                    // Also request the client's state so we converge.
-                    let sv = {
-                        let room_guard = room.lock().unwrap();
-                        room_guard.state_vector()
-                    };
-                    let req = crate::collab::protocol::sync_step1(&sv);
-                    room.lock().unwrap().broadcast(req, Some(sub_id));
+                    room.lock().unwrap().broadcast(frame, None);
                 }
                 SyncMessage::SyncStep2(_) => {
                     // Client's missing diff for us; nothing to broadcast.
@@ -265,15 +277,25 @@ async fn handle_collab_socket(
                 }
             },
             YMessage::AwarenessQuery => {
-                // Client wants full awareness: nothing to synthesize server-side
-                // (we forward awareness opaquely). No-op; clients exchange
-                // awareness updates directly via broadcast below.
+                // New client asks for current awareness: replay last frame.
+                let frame = {
+                    let room_guard = room.lock().unwrap();
+                    room_guard
+                        .last_awareness()
+                        .map(|b| b.to_vec())
+                        .filter(|b| !b.is_empty())
+                };
+                if let Some(bytes) = frame {
+                    room.lock().unwrap().broadcast(bytes, None);
+                }
             }
             YMessage::Awareness(_au) => {
-                // Client awareness update: forward raw bytes to other subscribers.
-                // We don't maintain a server-side Awareness (it isn't Send/Sync);
-                // clients each track awareness and reconcile.
-                room.lock().unwrap().broadcast(payload, Some(sub_id));
+                // Client awareness update: record it, then forward to others.
+                {
+                    let mut room_guard = room.lock().unwrap();
+                    room_guard.record_awareness(payload.clone());
+                    room_guard.broadcast(payload, Some(sub_id));
+                }
             }
             _ => {}
         }
@@ -283,4 +305,17 @@ async fn handle_collab_socket(
     room.lock().unwrap().remove_subscriber(sub_id);
     writer.abort();
     Ok(())
+}
+
+/// Human-readable name for a yjs Message variant (debug logging).
+fn msg_variant_name(msg: &yrs::sync::protocol::Message) -> &'static str {
+    use yrs::sync::protocol::{Message, SyncMessage};
+    match msg {
+        Message::Sync(SyncMessage::SyncStep1(_)) => "SyncStep1",
+        Message::Sync(SyncMessage::SyncStep2(_)) => "SyncStep2",
+        Message::Sync(SyncMessage::Update(_)) => "Update",
+        Message::Awareness(_) => "Awareness",
+        Message::AwarenessQuery => "AwarenessQuery",
+        _ => "Other",
+    }
 }

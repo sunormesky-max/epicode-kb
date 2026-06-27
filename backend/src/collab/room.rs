@@ -56,6 +56,9 @@ pub struct CollaborationRoom {
     doc: Doc,
     subscribers: Vec<Subscriber>,
     next_sub_id: u64,
+    /// Last-seen awareness frame (raw bytes), replayed to new joiners so they
+    /// learn about existing peers' presence without each peer re-broadcasting.
+    last_awareness: Vec<u8>,
 }
 
 impl CollaborationRoom {
@@ -75,6 +78,7 @@ impl CollaborationRoom {
             doc,
             subscribers: Vec::new(),
             next_sub_id: 1,
+            last_awareness: Vec::new(),
         })
     }
 
@@ -143,6 +147,20 @@ impl CollaborationRoom {
     /// Current number of subscribers.
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.len()
+    }
+
+    /// Record the latest raw awareness frame so new joiners can replay it.
+    pub fn record_awareness(&mut self, payload: Vec<u8>) {
+        self.last_awareness = payload;
+    }
+
+    /// Get the last-seen awareness frame (raw bytes), if any.
+    pub fn last_awareness(&self) -> Option<&[u8]> {
+        if self.last_awareness.is_empty() {
+            None
+        } else {
+            Some(&self.last_awareness)
+        }
     }
 
     /// Get the memory_id.
