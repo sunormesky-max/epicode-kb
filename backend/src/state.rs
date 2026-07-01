@@ -143,3 +143,16 @@ impl AppState {
         })
     }
 }
+
+impl Drop for AppState {
+    fn drop(&mut self) {
+        tracing::info!("AppState dropping — committing Tantivy and releasing resources");
+        // Attempt to commit any pending Tantivy changes
+        if let Ok(mut writer) = self.tantivy_writer.try_lock() {
+            if let Err(e) = writer.commit() {
+                tracing::error!("Failed to commit Tantivy on drop: {}", e);
+            }
+        }
+        // Note: SQLite connection is released when the Arc<Mutex<Connection>> is dropped
+    }
+}

@@ -143,6 +143,7 @@ pub struct User {
     pub id: String,
     pub email: String,
     pub name: String,
+    #[serde(skip_serializing)]
     pub password_hash: Option<String>,
     pub sso_subject: Option<String>,
     pub global_role: GlobalRole,
@@ -212,9 +213,23 @@ impl CreateLocalUserRequest {
         if self.name.trim().is_empty() {
             return Err(AppError::bad_request("name must not be empty"));
         }
-        if self.password.len() < 8 {
+        if self.password.len() < 12 {
             return Err(AppError::bad_request(
-                "password must be at least 8 characters",
+                "password must be at least 12 characters",
+            ));
+        }
+        if self.password.len() > 128 {
+            return Err(AppError::bad_request(
+                "password must not exceed 128 characters",
+            ));
+        }
+        let has_upper = self.password.chars().any(|c| c.is_uppercase());
+        let has_lower = self.password.chars().any(|c| c.is_lowercase());
+        let has_digit = self.password.chars().any(|c| c.is_ascii_digit());
+        let has_special = self.password.chars().any(|c| !c.is_alphanumeric());
+        if !has_upper || !has_lower || !has_digit || !has_special {
+            return Err(AppError::bad_request(
+                "password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character",
             ));
         }
         Ok(())

@@ -38,12 +38,13 @@ pub fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {
 pub struct MemoryRepo;
 
 impl MemoryRepo {
-    /// Insert a new memory into the database.
+    /// Insert a new memory into the database (within a transaction).
     pub fn insert(conn: &Connection, memory: &Memory) -> AppResult<()> {
+        let tx = conn.unchecked_transaction()?;
         let embedding_blob = memory.embedding.as_ref().map(|v| embedding_to_blob(v));
         let provenance_meta_str = memory.provenance_meta.as_ref().map(|v| v.to_string());
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO memories (id, space_id, content, embedding, embedding_model, provenance, provenance_meta, trust_level, review_status, visibility, version_of, version_seq, author_id, parent_conflict_id, last_accessed_at, access_count, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
@@ -67,6 +68,7 @@ impl MemoryRepo {
                 memory.updated_at,
             ],
         )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1146,7 +1148,8 @@ fn row_to_proposal(row: &rusqlite::Row) -> rusqlite::Result<crate::dream::propos
     let status_str: String = row.get(8)?;
     let status: ProposalStatus = serde_json::from_str(&format!("\"{}\"", status_str)).unwrap_or(ProposalStatus::Pending);
     let source_ids_str: String = row.get(3)?;
-    let source_memory_ids: Vec<String> = serde_json::from_str(&source_ids_str).unwrap_or_default();
+    let source_memory_ids: Vec<String> = serde_json::from_str(&source_ids_str)
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?;
     let action_str: Option<String> = row.get(5)?;
     let proposed_action = action_str.and_then(|s| serde_json::from_str(&s).ok());
     Ok(crate::dream::proposal::AiProposal {

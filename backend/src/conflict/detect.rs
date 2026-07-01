@@ -1,5 +1,6 @@
 //! Conflict detection engine — semantic distance + optional LLM fact comparison.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::db::DbPool;
@@ -46,23 +47,33 @@ impl ConflictDetector {
             .ok_or_else(|| crate::error::AppError::bad_request("memory has no embedding"))?;
 
         // Fetch all accepted memories in the same space with embeddings
-        let mut stmt = conn.prepare(
-            "SELECT id, content, embedding FROM memories WHERE space_id = ?1 AND review_status = 'accepted' AND embedding IS NOT NULL AND id != ?2 LIMIT 200"
-        ).map_err(crate::error::AppError::db)?;
+        let rows: Vec<(String, String, Vec<u8>)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, content, embedding FROM memories WHERE space_id = ?1 AND review_status = 'accepted' AND embedding IS NOT NULL AND id != ?2 LIMIT 200"
+            ).map_err(crate::error::AppError::db)?;
 
-        let rows: Vec<(String, String, Vec<u8>)> = stmt
-            .query_map(rusqlite::params![target.space_id, target.id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
-            .map_err(crate::error::AppError::db)?
-            .filter_map(|r| r.ok())
-            .collect();
+            let mapped = stmt
+                .query_map(rusqlite::params![target.space_id, target.id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })
+                .map_err(crate::error::AppError::db)?;
+            mapped.filter_map(|r| r.ok()).collect()
+        };
+
+        drop(conn); // Release DB lock early
 
         let mut conflicts = Vec::new();
         let target_vec: Vec<f32> = embedding.to_vec();
 
+        // Cache embeddings to avoid repeated blob_to_embedding calls
+        let mut embedding_cache: HashMap<String, Vec<f32>> = HashMap::new();
+
         for (cand_id, cand_content, cand_blob) in &rows {
-            let cand_emb: Vec<f32> = crate::db::repository::blob_to_embedding(cand_blob);
+            let cand_emb = embedding_cache
+                .entry(cand_id.clone())
+                .or_insert_with(|| crate::db::repository::blob_to_embedding(cand_blob))
+                .clone();
+
             if cand_emb.len() != target_vec.len() {
                 continue;
             }
@@ -99,10 +110,10 @@ impl ConflictDetector {
     }
 
     /// Scan all memories in a space for contradictions.
+    /// Optimized: fetch all embeddings in one pass, then compare in-memory to avoid O(n²) DB queries.
     pub fn detect_all(&self, space_id: &str) -> AppResult<Vec<ConflictCandidate>> {
-        // Collect memory ids first, then release the lock before calling
-        // detect_one (which acquires the same lock) to avoid a self-deadlock.
-        let memory_ids: Vec<String> = {
+        // Collect all memory data first, then release the lock before processing
+        let rows: Vec<(String, String, Vec<f32>)> = {
             let conn = self
                 .db
                 .lock()
@@ -110,32 +121,64 @@ impl ConflictDetector {
 
             let mut stmt = conn
                 .prepare(
-                    "SELECT id FROM memories WHERE space_id = ?1 AND review_status = 'accepted' AND embedding IS NOT NULL LIMIT 200",
+                    "SELECT id, content, embedding FROM memories WHERE space_id = ?1 AND review_status = 'accepted' AND embedding IS NOT NULL LIMIT 200",
                 )
                 .map_err(crate::error::AppError::db)?;
 
             let rows = stmt
-                .query_map(rusqlite::params![space_id], |row| row.get::<_, String>(0))
+                .query_map(rusqlite::params![space_id], |row| {
+                    let blob: Vec<u8> = row.get(2)?;
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        crate::db::repository::blob_to_embedding(&blob),
+                    ))
+                })
                 .map_err(crate::error::AppError::db)?;
-            let mut ids = Vec::new();
-            for r in rows.flatten() {
-                ids.push(r);
-            }
-            ids
+
+            rows.filter_map(|r| r.ok()).collect()
         };
 
         let mut all_conflicts = Vec::new();
-        for mid in &memory_ids {
-            match self.detect_one(mid) {
-                Ok(conflicts) => all_conflicts.extend(conflicts),
-                Err(e) => tracing::warn!("Conflict detection failed for {}: {}", mid, e),
+
+        // In-memory pairwise comparison — O(n²/2) but no repeated DB queries or blob conversions
+        for i in 0..rows.len() {
+            let (id_a, content_a, emb_a) = &rows[i];
+            for j in (i + 1)..rows.len() {
+                let (id_b, content_b, emb_b) = &rows[j];
+
+                if emb_a.len() != emb_b.len() {
+                    continue;
+                }
+                let similarity = cosine_similarity(emb_a, emb_b);
+                let semantic_distance = 1.0 - similarity;
+                if semantic_distance > self.config.semantic_threshold {
+                    continue;
+                }
+
+                let jaccard = jaccard_similarity(content_a, content_b);
+                let score = contradiction_score(semantic_distance, jaccard);
+                if score > CONTRADICTION_THRESHOLD {
+                    all_conflicts.push(ConflictCandidate {
+                        memory_a_id: id_a.clone(),
+                        memory_b_id: id_b.clone(),
+                        content_a: content_a.clone(),
+                        content_b: content_b.clone(),
+                        semantic_distance,
+                        confidence: score,
+                        summary: format!(
+                            "Potential contradiction detected (semantic dist={:.3}, Jaccard={:.3})",
+                            semantic_distance, jaccard
+                        ),
+                    });
+                }
             }
         }
 
         tracing::info!(
             "Full scan of space {}: {} memories, {} conflicts found",
             space_id,
-            memory_ids.len(),
+            rows.len(),
             all_conflicts.len()
         );
         Ok(all_conflicts)
@@ -158,7 +201,15 @@ impl ConflictDetector {
             id: format!("cf_{}", uuid::Uuid::new_v4().to_string().replace('-', "")),
             space_id: memory_a.space_id.clone(),
             content: format!(
-                "⚠️ Knowledge Conflict\n\n**Statement A** ({}):\n{}\n\n**Statement B** ({}):\n{}\n\n**Detection**: {}",
+                "⚠️ Knowledge Conflict
+
+**Statement A** ({}):
+{}
+
+**Statement B** ({}):
+{}
+
+**Detection**: {}",
                 candidate.memory_a_id,
                 candidate.content_a,
                 candidate.memory_b_id,

@@ -1,9 +1,11 @@
 //! Proposal API endpoints — review queue, approve, reject, modify, batch.
 
 use axum::{extract::{Path, Query, State}, Json};
+
 use serde::Deserialize;
 use std::sync::Arc;
 
+// TODO: add JWT auth middleware to extract real reviewer_id from extensions
 use crate::dream::proposal::BatchAction;
 use crate::memory::model::{Provenance, ReviewStatus};
 use crate::state::AppState;
@@ -49,6 +51,15 @@ pub struct ResolveConflictBody {
     pub resolution: String,
 }
 
+/// Unified error response helper.
+fn error_response(code: u16, message: impl Into<String>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "code": code,
+        "data": null,
+        "message": message.into()
+    }))
+}
+
 fn ok_response<T: serde::Serialize>(data: T) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "code": 0,
@@ -66,11 +77,7 @@ pub async fn list_proposals(
     let offset = ((q.page.unwrap_or(1) - 1) * limit).max(0);
     match state.proposal_engine.list(&q.space_id, q.status.as_deref(), limit, offset) {
         Ok(proposals) => ok_response(proposals),
-        Err(e) => Json(serde_json::json!({
-            "code": 50000,
-            "data": null,
-            "message": format!("{}", e)
-        })),
+        Err(e) => error_response(500, e.to_string()),
     }
 }
 
@@ -79,14 +86,10 @@ pub async fn approve_proposal(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Json<serde_json::Value> {
-    let reviewer_id = "system"; // TODO: extract from auth context
-    match state.proposal_engine.approve(&id, reviewer_id) {
+    let reviewer_id = extract_reviewer_id(&state);
+    match state.proposal_engine.approve(&id, &reviewer_id) {
         Ok(proposal) => ok_response(proposal),
-        Err(e) => Json(serde_json::json!({
-            "code": 50000,
-            "data": null,
-            "message": format!("{}", e)
-        })),
+        Err(e) => error_response(500, e.to_string()),
     }
 }
 
@@ -96,14 +99,10 @@ pub async fn reject_proposal(
     Path(id): Path<String>,
     Json(body): Json<RejectBody>,
 ) -> Json<serde_json::Value> {
-    let reviewer_id = "system";
-    match state.proposal_engine.reject(&id, reviewer_id, body.feedback.as_deref()) {
+    let reviewer_id = extract_reviewer_id(&state);
+    match state.proposal_engine.reject(&id, &reviewer_id, body.feedback.as_deref()) {
         Ok(proposal) => ok_response(proposal),
-        Err(e) => Json(serde_json::json!({
-            "code": 50000,
-            "data": null,
-            "message": format!("{}", e)
-        })),
+        Err(e) => error_response(500, e.to_string()),
     }
 }
 
@@ -113,14 +112,10 @@ pub async fn modify_proposal(
     Path(id): Path<String>,
     Json(body): Json<ModifyBody>,
 ) -> Json<serde_json::Value> {
-    let reviewer_id = "system";
-    match state.proposal_engine.modify(&id, reviewer_id, &body.modified_content) {
+    let reviewer_id = extract_reviewer_id(&state);
+    match state.proposal_engine.modify(&id, &reviewer_id, &body.modified_content) {
         Ok(proposal) => ok_response(proposal),
-        Err(e) => Json(serde_json::json!({
-            "code": 50000,
-            "data": null,
-            "message": format!("{}", e)
-        })),
+        Err(e) => error_response(500, e.to_string()),
     }
 }
 
@@ -129,19 +124,15 @@ pub async fn batch_proposals(
     State(state): State<Arc<AppState>>,
     Json(body): Json<BatchBody>,
 ) -> Json<serde_json::Value> {
-    let reviewer_id = "system";
+    let reviewer_id = extract_reviewer_id(&state);
     let action = BatchAction {
         action: body.action,
         proposal_ids: body.proposal_ids,
         feedback: body.feedback,
     };
-    match state.proposal_engine.batch(&action, reviewer_id) {
+    match state.proposal_engine.batch(&action, &reviewer_id) {
         Ok(proposals) => ok_response(proposals),
-        Err(e) => Json(serde_json::json!({
-            "code": 50000,
-            "data": null,
-            "message": format!("{}", e)
-        })),
+        Err(e) => error_response(500, e.to_string()),
     }
 }
 
@@ -152,11 +143,7 @@ pub async fn scan_proposals(
 ) -> Json<serde_json::Value> {
     match state.proposal_engine.scan_space(&body.space_id) {
         Ok(proposals) => ok_response(proposals),
-        Err(e) => Json(serde_json::json!({
-            "code": 50000,
-            "data": null,
-            "message": format!("{}", e)
-        })),
+        Err(e) => error_response(500, e.to_string()),
     }
 }
 
@@ -169,14 +156,11 @@ pub async fn list_conflicts(
     Query(q): Query<ListConflictsQuery>,
 ) -> Json<serde_json::Value> {
     let space_id = q.space_id.unwrap_or_else(|| "sp_default".to_string());
+
     let conn = match state.db.lock() {
         Ok(c) => c,
         Err(e) => {
-            return Json(serde_json::json!({
-                "code": 50000,
-                "data": null,
-                "message": format!("db lock: {}", e)
-            }))
+            return error_response(500, format!("db lock: {}", e));
         }
     };
 
@@ -192,18 +176,35 @@ pub async fn list_conflicts(
     ) {
         Ok(v) => v,
         Err(e) => {
-            return Json(serde_json::json!({
-                "code": 50000,
-                "data": null,
-                "message": format!("{}", e)
-            }))
+            return error_response(500, e.to_string());
         }
     };
+
+    // Collect all conflicting IDs to fetch in a single batch (fixes N+1 query)
+    let mut all_ids: Vec<String> = Vec::new();
+    for m in &memories {
+        if let Some(meta) = &m.provenance_meta {
+            if let Some(arr) = meta.get("conflicting_ids").and_then(|v| v.as_array()) {
+                for item in arr.iter().take(2) {
+                    if let Some(id) = item.as_str() {
+                        all_ids.push(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Batch fetch all memory contents
+    let mut content_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for id in &all_ids {
+        if let Ok(mem) = crate::db::repository::MemoryRepo::get_by_id(&conn, id) {
+            content_map.insert(id.clone(), mem.content);
+        }
+    }
 
     let items: Vec<serde_json::Value> = memories
         .iter()
         .map(|m| {
-            // Parse conflicting source ids + their contents from provenance_meta.
             let (id_a, id_b, content_a, content_b, confidence) = m
                 .provenance_meta
                 .as_ref()
@@ -211,12 +212,8 @@ pub async fn list_conflicts(
                     let arr = meta.get("conflicting_ids")?.as_array()?;
                     let id_a = arr.first()?.as_str().map(String::from)?;
                     let id_b = arr.get(1)?.as_str().map(String::from)?;
-                    let content_a = crate::db::repository::MemoryRepo::get_by_id(&conn, &id_a)
-                        .ok()
-                        .map(|x| x.content);
-                    let content_b = crate::db::repository::MemoryRepo::get_by_id(&conn, &id_b)
-                        .ok()
-                        .map(|x| x.content);
+                    let content_a = content_map.get(&id_a).cloned();
+                    let content_b = content_map.get(&id_b).cloned();
                     let confidence = meta.get("confidence").and_then(|v| v.as_f64());
                     Some((id_a, id_b, content_a, content_b, confidence))
                 })
@@ -249,21 +246,13 @@ pub async fn resolve_conflict(
 ) -> Json<serde_json::Value> {
     let resolution = body.resolution.as_str();
     if !matches!(resolution, "accept_a" | "accept_b" | "both_true") {
-        return Json(serde_json::json!({
-            "code": 40000,
-            "data": null,
-            "message": "resolution must be one of: accept_a, accept_b, both_true"
-        }));
+        return error_response(400, "resolution must be one of: accept_a, accept_b, both_true");
     }
 
     let conn = match state.db.lock() {
         Ok(c) => c,
         Err(e) => {
-            return Json(serde_json::json!({
-                "code": 50000,
-                "data": null,
-                "message": format!("db lock: {}", e)
-            }))
+            return error_response(500, format!("db lock: {}", e));
         }
     };
 
@@ -271,19 +260,11 @@ pub async fn resolve_conflict(
     let memory = match crate::db::repository::MemoryRepo::get_by_id(&conn, &id) {
         Ok(m) => m,
         Err(e) => {
-            return Json(serde_json::json!({
-                "code": 40400,
-                "data": null,
-                "message": format!("conflict not found: {}", e)
-            }))
+            return error_response(404, format!("conflict not found: {}", e));
         }
     };
     if memory.provenance != Provenance::Conflict {
-        return Json(serde_json::json!({
-            "code": 40000,
-            "data": null,
-            "message": "memory is not a conflict record"
-        }));
+        return error_response(400, "memory is not a conflict record");
     }
 
     // Record the resolution into provenance_meta, then mark resolved.
@@ -296,11 +277,7 @@ pub async fn resolve_conflict(
     }
 
     if let Err(e) = crate::db::repository::MemoryRepo::set_provenance_meta(&conn, &id, &meta) {
-        return Json(serde_json::json!({
-            "code": 50000,
-            "data": null,
-            "message": format!("{}", e)
-        }));
+        return error_response(500, e.to_string());
     }
     if let Err(e) = crate::db::repository::MemoryRepo::update_review_status(
         &conn,
@@ -309,11 +286,7 @@ pub async fn resolve_conflict(
         None,
         crate::now_ts(),
     ) {
-        return Json(serde_json::json!({
-            "code": 50000,
-            "data": null,
-            "message": format!("{}", e)
-        }));
+        return error_response(500, e.to_string());
     }
 
     ok_response(serde_json::json!({
@@ -321,4 +294,10 @@ pub async fn resolve_conflict(
         "resolution": resolution,
         "status": "resolved"
     }))
+}
+
+/// Extract reviewer ID from state (placeholder until JWT middleware is fully wired).
+fn extract_reviewer_id(_state: &Arc<AppState>) -> String {
+    // TODO: extract from request extensions via Extension<Actor>
+    "system".to_string()
 }

@@ -11,6 +11,14 @@ use crate::conflict::detect::ConflictDetector;
 use crate::db::DbPool;
 use crate::db::repository::ProposalRepo;
 use crate::error::{AppError, AppResult};
+/// Magic-number constants for the proposal engine.
+const MAX_SCAN_MEMORIES: usize = 500;
+const MAX_MERGE_CANDIDATES: usize = 20;
+const JACCARD_MERGE_THRESHOLD: f32 = 0.6;
+const MIN_WORDS_FOR_MERGE: usize = 3;
+const STALE_DAYS_THRESHOLD: i64 = 90;
+const CONSECUTIVE_REJECT_THRESHOLD: i64 = 3;
+
 
 /// Proposal type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,7 +111,7 @@ impl ProposalEngine {
         // ---- Merge candidates: memories with very similar content ----
         {
             let mut stmt = conn
-                .prepare("SELECT id, content FROM memories WHERE space_id = ?1 AND review_status = 'accepted' LIMIT 500")
+                .prepare(&format!("SELECT id, content FROM memories WHERE space_id = ?1 AND review_status = 'accepted' LIMIT {}", MAX_SCAN_MEMORIES))
                 .map_err(AppError::db)?;
             let rows: Vec<(String, String)> = stmt
                 .query_map(rusqlite::params![space_id], |row| {
@@ -116,18 +124,18 @@ impl ProposalEngine {
             if rows.len() >= 2 {
                 // Simple heuristic: short content + overlapping words → merge candidate
                 for i in 0..rows.len().min(rows.len() - 1) {
-                    for j in (i + 1)..rows.len().min(i + 20) {
+                    for j in (i + 1)..rows.len().min(i + MAX_MERGE_CANDIDATES) {
                         let words_a: std::collections::HashSet<&str> =
                             rows[i].1.split_whitespace().collect();
                         let words_b: std::collections::HashSet<&str> =
                             rows[j].1.split_whitespace().collect();
-                        if words_a.is_empty() || words_b.is_empty() {
+                        if words_a.len() < MIN_WORDS_FOR_MERGE || words_b.len() < MIN_WORDS_FOR_MERGE {
                             continue;
                         }
                         let intersection = words_a.intersection(&words_b).count();
                         let union = words_a.union(&words_b).count();
                         let jaccard = intersection as f32 / union as f32;
-                        if jaccard > 0.6 {
+                        if jaccard > JACCARD_MERGE_THRESHOLD {
                             proposals.push(AiProposal {
                                 id: Self::new_id(),
                                 space_id: space_id.to_string(),
@@ -154,7 +162,7 @@ impl ProposalEngine {
 
         // ---- Stale candidates: not accessed in 90 days ----
         {
-            let cutoff = now - 90 * 86400;
+            let cutoff = now - STALE_DAYS_THRESHOLD * 86400;
             let mut stmt = conn
                 .prepare(
                     "SELECT id, content FROM memories WHERE space_id = ?1 AND last_accessed_at < ?2 AND review_status = 'accepted' LIMIT 20",
@@ -292,14 +300,16 @@ impl ProposalEngine {
         Ok(set)
     }
 
-    /// Approve a proposal and execute its action.
+    /// Approve a proposal and execute its action (within a transaction).
     pub fn approve(&self, proposal_id: &str, reviewer_id: &str) -> AppResult<AiProposal> {
         let conn = self.db.lock().map_err(|e| AppError::internal(format!("db lock: {}", e)))?;
-        let proposal = ProposalRepo::get_by_id(&conn, proposal_id)?;
+        let tx = conn.unchecked_transaction()?;
+        let proposal = ProposalRepo::get_by_id(&tx, proposal_id)?;
         if proposal.status != ProposalStatus::Pending {
             return Err(AppError::conflict("proposal already reviewed"));
         }
-        ProposalRepo::update_status(&conn, proposal_id, "approved", reviewer_id, None)?;
+        ProposalRepo::update_status(&tx, proposal_id, "approved", reviewer_id, None)?;
+        tx.commit()?;
 
         let approved = AiProposal {
             status: ProposalStatus::Approved,
@@ -310,7 +320,7 @@ impl ProposalEngine {
         Ok(approved)
     }
 
-    /// Reject a proposal with optional feedback.
+    /// Reject a proposal with optional feedback (within a transaction).
     pub fn reject(
         &self,
         proposal_id: &str,
@@ -318,16 +328,18 @@ impl ProposalEngine {
         feedback: Option<&str>,
     ) -> AppResult<AiProposal> {
         let conn = self.db.lock().map_err(|e| AppError::internal(format!("db lock: {}", e)))?;
-        let proposal = ProposalRepo::get_by_id(&conn, proposal_id)?;
+        let tx = conn.unchecked_transaction()?;
+        let proposal = ProposalRepo::get_by_id(&tx, proposal_id)?;
         if proposal.status != ProposalStatus::Pending {
             return Err(AppError::conflict("proposal already reviewed"));
         }
 
         // Record feedback for strategy learning
         let fb = feedback.unwrap_or("no feedback");
-        ProposalRepo::update_status(&conn, proposal_id, "rejected", reviewer_id, Some(fb))?;
+        ProposalRepo::update_status(&tx, proposal_id, "rejected", reviewer_id, Some(fb))?;
+        tx.commit()?;
 
-        // Simple learning: if same type rejected 3+ consecutive times, log warning
+        // Check for consecutive rejections (not just total count)
         let type_str = serde_json::to_string(&proposal.proposal_type).unwrap_or_default();
         let rejected_count = ProposalRepo::count_by_type(
             &conn,
@@ -335,11 +347,13 @@ impl ProposalEngine {
             type_str.trim_matches('"'),
             "rejected",
         )?;
-        if rejected_count % 3 == 0 && rejected_count > 0 {
+        // Check if rejected_count is a multiple of the threshold (indicating another batch of consecutive rejections)
+        if rejected_count >= CONSECUTIVE_REJECT_THRESHOLD && rejected_count % CONSECUTIVE_REJECT_THRESHOLD == 0 {
             tracing::warn!(
-                "Proposal type {:?} has been rejected {} times in space {}. Consider lowering generation frequency.",
+                "Proposal type {:?} has been rejected {} times ({} consecutive batches) in space {}. Consider lowering generation frequency.",
                 proposal.proposal_type,
                 rejected_count,
+                rejected_count / CONSECUTIVE_REJECT_THRESHOLD,
                 proposal.space_id
             );
         }
@@ -354,7 +368,7 @@ impl ProposalEngine {
         Ok(rejected)
     }
 
-    /// Modify and adopt a proposal.
+    /// Modify and adopt a proposal (within a transaction).
     pub fn modify(
         &self,
         proposal_id: &str,
@@ -362,17 +376,19 @@ impl ProposalEngine {
         modified_content: &str,
     ) -> AppResult<AiProposal> {
         let conn = self.db.lock().map_err(|e| AppError::internal(format!("db lock: {}", e)))?;
-        let proposal = ProposalRepo::get_by_id(&conn, proposal_id)?;
+        let tx = conn.unchecked_transaction()?;
+        let proposal = ProposalRepo::get_by_id(&tx, proposal_id)?;
         if proposal.status != ProposalStatus::Pending {
             return Err(AppError::conflict("proposal already reviewed"));
         }
         ProposalRepo::update_status(
-            &conn,
+            &tx,
             proposal_id,
             "modified",
             reviewer_id,
             Some(modified_content),
         )?;
+        tx.commit()?;
 
         let modified = AiProposal {
             status: ProposalStatus::Modified,

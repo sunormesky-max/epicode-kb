@@ -44,7 +44,7 @@ impl HybridSearcher {
         // Fetch limit is increased to account for filtering
         let fetch_limit = (query.limit + query.offset) * 3;
 
-        // Run searches based on mode
+        // Run searches based on mode — release locks as soon as possible
         let (semantic_results, fulltext_results) = match query.mode {
             crate::search::SearchMode::Semantic => {
                 let sem = self
@@ -53,31 +53,35 @@ impl HybridSearcher {
                 (sem, Vec::new())
             }
             crate::search::SearchMode::Fulltext => {
-                let conn = self.db.lock().unwrap();
-                let ft = self.fulltext.search_and_filter(
-                    &query.q,
-                    &query.space_id,
-                    fetch_limit,
-                    &conn,
-                )?;
+                let ft = {
+                    let conn = self.db.lock().unwrap();
+                    self.fulltext.search_and_filter(
+                        &query.q,
+                        &query.space_id,
+                        fetch_limit,
+                        &conn,
+                    )?
+                };
                 (Vec::new(), ft)
             }
             crate::search::SearchMode::Hybrid => {
                 let sem = self
                     .semantic
                     .search_and_load(&query.q, &query.space_id, fetch_limit)?;
-                let conn = self.db.lock().unwrap();
-                let ft = self.fulltext.search_and_filter(
-                    &query.q,
-                    &query.space_id,
-                    fetch_limit,
-                    &conn,
-                )?;
+                let ft = {
+                    let conn = self.db.lock().unwrap();
+                    self.fulltext.search_and_filter(
+                        &query.q,
+                        &query.space_id,
+                        fetch_limit,
+                        &conn,
+                    )?
+                };
                 (sem, ft)
             }
         };
 
-        // Merge results using RRF + trust weighting
+        // Merge results using RRF + trust weighting (no DB lock needed)
         let merged = self.merge_results(&semantic_results, &fulltext_results, query);
 
         let total = merged.len();
@@ -89,7 +93,7 @@ impl HybridSearcher {
             .take(query.limit)
             .collect();
 
-        // Update access counts for returned memories
+        // Update access counts for returned memories — minimal lock time
         {
             let conn = self.db.lock().unwrap();
             let ids: Vec<String> = results.iter().map(|r| r.memory.id.clone()).collect();
@@ -139,11 +143,11 @@ impl HybridSearcher {
             .map(|(rank, (mem, _))| (mem.id.clone(), rank))
             .collect();
 
-        // Collect all unique memory IDs
-        let mut memory_map: HashMap<String, (Memory, Option<f32>, Option<f32>)> = HashMap::new();
+        // Collect all unique memory IDs — avoid cloning entire Memory objects
+        let mut memory_map: HashMap<String, (&Memory, Option<f32>, Option<f32>)> = HashMap::new();
 
         for (mem, score) in semantic {
-            memory_map.insert(mem.id.clone(), (mem.clone(), Some(*score), None));
+            memory_map.insert(mem.id.clone(), (mem, Some(*score), None));
         }
 
         for (mem, score) in fulltext {
@@ -152,7 +156,7 @@ impl HybridSearcher {
                 .and_modify(|(_, _, ft)| {
                     *ft = Some(*score);
                 })
-                .or_insert_with(|| (mem.clone(), None, Some(*score)));
+                .or_insert((mem, None, Some(*score)));
         }
 
         // Compute RRF scores
@@ -161,7 +165,7 @@ impl HybridSearcher {
             .filter_map(|(memory, sem_score, ft_score)| {
                 // Apply filters
                 if !passes_filters(
-                    &memory,
+                    memory,
                     query.min_trust,
                     query.provenance.as_deref(),
                     query.review_status,
@@ -196,7 +200,7 @@ impl HybridSearcher {
                 let highlight = self.fulltext.highlight(&query.q, &memory.content, 200);
 
                 Some(SearchResult {
-                    memory,
+                    memory: memory.clone(),
                     score: final_score,
                     semantic_score: sem_score,
                     fulltext_score: ft_score,

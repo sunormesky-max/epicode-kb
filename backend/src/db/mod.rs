@@ -54,16 +54,6 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         Ok(count > 0)
     }
 
-    /// Record a migration as applied.
-    fn mark_applied(conn: &Connection, name: &str) -> AppResult<()> {
-        let now = crate::now_ts();
-        conn.execute(
-            "INSERT INTO _migrations (name, applied_at) VALUES (?1, ?2)",
-            rusqlite::params![name, now],
-        )?;
-        Ok(())
-    }
-
     let migrations: &[(&str, &str)] = &[
         ("001_init", schema::MIGRATION_001_INIT),
         ("002_indexes", schema::MIGRATION_002_INDEXES),
@@ -76,12 +66,51 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
             tracing::info!("  Skipping already-applied migration {}", name);
             continue;
         }
-        conn.execute_batch(sql)?;
-        mark_applied(conn, name)?;
-        tracing::info!("  Applied migration {}", name);
+        // Wrap each migration in a transaction so a partial failure (e.g. an
+        // ALTER TABLE that already exists) rolls back ALL of its statements
+        // and is NOT marked as applied. This makes retrying safe — the next
+        // start re-runs the whole migration from scratch instead of leaving
+        // half-applied schema behind (which previously made restarts crash
+        // with "duplicate column name").
+        match apply_migration_in_txn(conn, name, sql) {
+            Ok(()) => tracing::info!("  Applied migration {}", name),
+            Err(e) => {
+                return Err(crate::error::AppError::internal(format!(
+                    "migration {} failed and was rolled back: {}",
+                    name, e
+                )));
+            }
+        }
     }
 
     Ok(())
+}
+
+/// Apply a single migration inside an explicit transaction.
+///
+/// On failure the transaction is rolled back so no partial schema changes
+/// persist; the migration is therefore not recorded as applied and the next
+/// run can retry it cleanly.
+fn apply_migration_in_txn(conn: &Connection, name: &str, sql: &str) -> AppResult<()> {
+    conn.execute_batch("BEGIN")?;
+    let result = conn.execute_batch(sql);
+    match result {
+        Ok(()) => {
+            // Record as applied inside the same transaction.
+            let now = crate::now_ts();
+            conn.execute(
+                "INSERT INTO _migrations (name, applied_at) VALUES (?1, ?2)",
+                rusqlite::params![name, now],
+            )?;
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(e) => {
+            // Ignore rollback errors — the original failure is what matters.
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(crate::error::AppError::db(e))
+        }
+    }
 }
 
 /// Create a default space if none exists.

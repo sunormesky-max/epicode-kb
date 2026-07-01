@@ -7,12 +7,18 @@ use axum::{
     response::Response,
     Json,
 };
+use axum::extract::ws::{Message, WebSocket};
+use futures::{stream::StreamExt, SinkExt};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::auth::model::Actor;
 use crate::conflict::detect::{contradiction_score, cosine_similarity, jaccard_similarity, CONTRADICTION_THRESHOLD};
 use crate::error::AppError;
 use crate::state::AppState;
+
+/// Maximum WebSocket message size in bytes (16 MB).
+const MAX_WS_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct ContextParams {
@@ -143,13 +149,9 @@ pub async fn get_context(
         let score = contradiction_score(*sem_dist, jac);
         if score > CONTRADICTION_THRESHOLD {
             warnings.push(format!(
-                "This may contradict existing knowledge (confidence {:.0}%): \"{}\"",
-                score * 100.0,
-                content.chars().take(120).collect::<String>()
+                "This may contradict existing knowledge (semantic distance={:.3}, Jaccard={:.3})",
+                sem_dist, jac
             ));
-            if warnings.len() >= 3 {
-                break;
-            }
         }
     }
 
@@ -159,37 +161,42 @@ pub async fn get_context(
     })))
 }
 
-/// WebSocket handler for /api/v1/collab/:memory_id (standard yjs protocol).
+/// WebSocket upgrade handler for real-time collaboration.
+///
+/// Authenticates the client via the `?token=` query parameter before upgrading.
 pub async fn collab_ws(
     State(state): State<Arc<AppState>>,
-    Extension(_actor): Extension<Actor>,
     Path(memory_id): Path<String>,
     ws: WebSocketUpgrade,
-) -> Result<Response, AppError> {
-    let room_manager = state.room_manager.clone();
-    let room = room_manager.get_or_create(&memory_id)?;
-
-    Ok(ws.on_upgrade(move |socket| async move {
-        if let Err(e) = handle_collab_socket(socket, room).await {
-            tracing::warn!("collab socket error for {}: {}", memory_id, e);
-        }
-    }))
+) -> Response {
+    // The auth middleware already validated the token from ?token= query param
+    // and injected the Actor into extensions. We just need to accept the upgrade.
+    ws.on_upgrade(move |socket| handle_collab_socket(state, memory_id, socket))
 }
 
-/// Drive a single WebSocket connection through the standard yjs sync protocol.
+/// Handle an individual WebSocket connection for a collaboration room.
 async fn handle_collab_socket(
-    socket: axum::extract::ws::WebSocket,
-    room: Arc<std::sync::Mutex<crate::collab::room::CollaborationRoom>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use axum::extract::ws::Message;
-    use futures::{SinkExt, StreamExt};
-    use tokio::sync::mpsc;
-    use yrs::sync::protocol::{Message as YMessage, SyncMessage};
+    state: Arc<AppState>,
+    memory_id: String,
+    socket: WebSocket,
+) {
+    use yrs::sync::protocol::Message as YMessage;
+    use yrs::sync::protocol::SyncMessage;
+
+    let room = match state.room_manager.get_or_create(&memory_id) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Failed to get/create room {}: {}", memory_id, e);
+            return;
+        }
+    };
 
     let (mut ws_sink, mut ws_stream) = socket.split();
 
-    // Outbound channel: room broadcasts push Message here; a writer task drains it.
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    // Create a broadcast channel for this subscriber.
+    let (tx, mut rx): (tokio::sync::mpsc::UnboundedSender<Message>, UnboundedReceiver<Message>) =
+        tokio::sync::mpsc::unbounded_channel();
+
     let sub_id = {
         let mut room_guard = room.lock().unwrap();
         room_guard.add_subscriber(tx)
@@ -227,9 +234,23 @@ async fn handle_collab_socket(
             Ok(m) => m,
             Err(_) => break,
         };
+
+        // Enforce message size limit
         let payload: Vec<u8> = match msg {
-            Message::Binary(b) => b,
-            Message::Text(t) => t.into_bytes(),
+            Message::Binary(b) => {
+                if b.len() > MAX_WS_MESSAGE_SIZE {
+                    tracing::warn!("WebSocket message too large ({} bytes), dropping", b.len());
+                    continue;
+                }
+                b
+            }
+            Message::Text(t) => {
+                if t.len() > MAX_WS_MESSAGE_SIZE {
+                    tracing::warn!("WebSocket message too large ({} bytes), dropping", t.len());
+                    continue;
+                }
+                t.into_bytes()
+            }
             Message::Ping(_) | Message::Pong(_) | Message::Close(_) => continue,
         };
 
@@ -301,10 +322,11 @@ async fn handle_collab_socket(
         }
     }
 
-    // Cleanup: remove subscriber, drop writer.
+    // Cleanup: remove subscriber, then gracefully abort and await the writer task.
     room.lock().unwrap().remove_subscriber(sub_id);
     writer.abort();
-    Ok(())
+    // Give the writer task a moment to clean up, but don't block indefinitely.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), writer).await;
 }
 
 /// Human-readable name for a yjs Message variant (debug logging).

@@ -27,6 +27,9 @@ pub struct MemoryService {
     rbac: RbacEngine,
 }
 
+/// Helper to lock a std::sync::Mutex and map poison to AppError.
+
+
 impl MemoryService {
     /// Create a new MemoryService.
     pub fn new(
@@ -68,15 +71,19 @@ impl MemoryService {
         self.rbac.check(&ctx, permission)
     }
 
-    /// Create a new memory: build struct → generate embedding → write to DB → index in Tantivy.
+    /// Create a new memory: validate → check permission → build struct → generate embedding → write to DB → index in Tantivy.
     pub fn create(&self, req: CreateMemoryRequest, actor: Option<&Actor>) -> AppResult<Memory> {
         req.validate()?;
+
+        // Check permission BEFORE building memory
+        if let Some(actor) = actor {
+            self.check(actor, &req.space_id, Permission::MemoryWrite)?;
+        }
 
         let mut memory = Memory::new(req.space_id.clone(), req.content.clone(), req.provenance);
 
         if let Some(actor) = actor {
             memory.author_id = Some(actor.user_id.clone());
-            self.check(actor, &req.space_id, Permission::MemoryWrite)?;
         }
 
         // Override trust_level if provided
@@ -114,11 +121,11 @@ impl MemoryService {
 
         // Write to database
         {
-            let conn = self.db.lock().unwrap();
+            let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
             MemoryRepo::insert(&conn, &memory)?;
         }
 
-        // Index in Tantivy
+        // Index in Tantivy (no per-operation commit; caller or background task commits)
         self.index_fulltext(&memory)?;
 
         // Audit log
@@ -184,7 +191,7 @@ impl MemoryService {
         }
 
         {
-            let conn = self.db.lock().unwrap();
+            let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
             MemoryRepo::insert(&conn, &memory)?;
         }
 
@@ -210,7 +217,7 @@ impl MemoryService {
 
     /// Get a memory by ID (updates access count).
     pub fn get_by_id(&self, id: &str) -> AppResult<Memory> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
         let memory = MemoryRepo::get_by_id(&conn, id)?;
         MemoryRepo::update_access(&conn, &[id.to_string()], crate::now_ts())?;
         Ok(memory)
@@ -228,7 +235,7 @@ impl MemoryService {
         limit: usize,
         offset: usize,
     ) -> AppResult<(Vec<Memory>, usize)> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
         MemoryRepo::list(
             &conn,
             space_id,
@@ -255,7 +262,7 @@ impl MemoryService {
 
         let now = crate::now_ts();
         {
-            let conn = self.db.lock().unwrap();
+            let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
             MemoryRepo::update_trust(&conn, id, req.trust_level, now)?;
         }
 
@@ -289,7 +296,7 @@ impl MemoryService {
 
         let now = crate::now_ts();
         {
-            let conn = self.db.lock().unwrap();
+            let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
             MemoryRepo::update_visibility(&conn, id, visibility, now)?;
         }
 
@@ -324,7 +331,7 @@ impl MemoryService {
 
         let now = crate::now_ts();
         {
-            let conn = self.db.lock().unwrap();
+            let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
             let new_trust = (memory.trust_level.value() + 0.2).min(1.0);
             MemoryRepo::update_review_status(
                 &conn,
@@ -367,7 +374,7 @@ impl MemoryService {
 
         let now = crate::now_ts();
         {
-            let conn = self.db.lock().unwrap();
+            let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
             MemoryRepo::update_review_status(&conn, id, ReviewStatus::Rejected, None, now)?;
         }
 
@@ -419,7 +426,7 @@ impl MemoryService {
         };
 
         {
-            let conn = self.db.lock().unwrap();
+            let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
             MemoryVersionRepo::insert(&conn, &version)?;
             MemoryRepo::update_content(&conn, memory_id, &req.content, new_seq, now)?;
         }
@@ -450,7 +457,7 @@ impl MemoryService {
         let memory = self.get_by_id(memory_id)?;
         self.check(actor, &memory.space_id, Permission::MemoryWrite)?;
 
-        let conn = self.db.lock().unwrap();
+        let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
         let version = MemoryVersionRepo::get_by_id(&conn, version_id)?;
         if version.memory_id != memory_id {
             return Err(AppError::bad_request("version does not belong to memory"));
@@ -527,14 +534,14 @@ impl MemoryService {
         };
 
         {
-            let conn = self.db.lock().unwrap();
+            let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
             MemoryVersionRepo::insert(&conn, &version)?;
             MemoryRepo::update_content(&conn, memory_id, &content, new_seq, now)?;
         }
 
         // Mark provenance as co (collaborative) and accepted.
         {
-            let conn = self.db.lock().unwrap();
+            let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
             MemoryRepo::update_review_status(&conn, memory_id, ReviewStatus::Accepted, None, now)?;
         }
 
@@ -562,7 +569,7 @@ impl MemoryService {
         limit: usize,
         offset: usize,
     ) -> AppResult<(Vec<MemoryVersion>, usize)> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
         MemoryVersionRepo::list_by_memory(&conn, memory_id, limit, offset)
     }
 
@@ -571,7 +578,7 @@ impl MemoryService {
         &self,
         memory_id: &str,
     ) -> AppResult<Vec<crate::auth::model::MemoryPermission>> {
-        let conn = self.db.lock().unwrap();
+        let conn = self.db.lock().map_err(|_| AppError::Internal("DB lock poisoned".into()))?;
         MemoryPermissionRepo::list_by_memory(&conn, memory_id)
     }
 
@@ -588,49 +595,53 @@ impl MemoryService {
     // Private helpers
     // ============================================================
 
-    /// Index a memory in the Tantivy full-text index.
+    /// Build a Tantivy document from a memory.
+    fn build_tantivy_doc(&self, memory: &Memory) -> TantivyDocument {
+        let schema = &self.tantivy_schema;
+        let mut doc = TantivyDocument::new();
+        doc.add_text(schema.memory_id, &memory.id);
+        doc.add_text(schema.space_id, &memory.space_id);
+        doc.add_text(schema.content, crate::memory::html::strip_tags(&memory.content));
+        doc.add_text(schema.provenance, memory.provenance.as_str());
+        doc.add_text(schema.review_status, memory.review_status.as_str());
+        doc.add_text(schema.visibility, memory.visibility.as_str());
+        doc.add_f64(schema.trust_level, memory.trust_level.value() as f64);
+        doc.add_i64(schema.created_at, memory.created_at);
+        doc
+    }
+
+    /// Index a memory in the Tantivy full-text index (no commit — caller or background task commits).
     fn index_fulltext(&self, memory: &Memory) -> AppResult<()> {
-        let mut writer = self.tantivy_writer.lock().unwrap();
-        let schema = &self.tantivy_schema;
-        let mut doc = TantivyDocument::new();
-        doc.add_text(schema.memory_id, &memory.id);
-        doc.add_text(schema.space_id, &memory.space_id);
-        doc.add_text(schema.content, crate::memory::html::strip_tags(&memory.content));
-        doc.add_text(schema.provenance, memory.provenance.as_str());
-        doc.add_text(schema.review_status, memory.review_status.as_str());
-        doc.add_text(schema.visibility, memory.visibility.as_str());
-        doc.add_f64(schema.trust_level, memory.trust_level.value() as f64);
-        doc.add_i64(schema.created_at, memory.created_at);
+        let writer = self.tantivy_writer.lock().unwrap();
+        let doc = self.build_tantivy_doc(memory);
         writer.add_document(doc)?;
-        writer.commit()?;
+        // writer.commit() removed — use background commit or explicit batch commit
         Ok(())
     }
 
-    /// Re-index a memory (delete old, add new).
+    /// Re-index a memory (delete old, add new) — no commit.
     fn reindex_fulltext(&self, memory: &Memory) -> AppResult<()> {
-        let mut writer = self.tantivy_writer.lock().unwrap();
-        let schema = &self.tantivy_schema;
-        let term = tantivy::Term::from_field_text(schema.memory_id, &memory.id);
+        let writer = self.tantivy_writer.lock().unwrap();
+        let term = tantivy::Term::from_field_text(self.tantivy_schema.memory_id, &memory.id);
         writer.delete_term(term);
-        let mut doc = TantivyDocument::new();
-        doc.add_text(schema.memory_id, &memory.id);
-        doc.add_text(schema.space_id, &memory.space_id);
-        doc.add_text(schema.content, crate::memory::html::strip_tags(&memory.content));
-        doc.add_text(schema.provenance, memory.provenance.as_str());
-        doc.add_text(schema.review_status, memory.review_status.as_str());
-        doc.add_text(schema.visibility, memory.visibility.as_str());
-        doc.add_f64(schema.trust_level, memory.trust_level.value() as f64);
-        doc.add_i64(schema.created_at, memory.created_at);
+        let doc = self.build_tantivy_doc(memory);
         writer.add_document(doc)?;
-        writer.commit()?;
+        // writer.commit() removed
         Ok(())
     }
 
-    /// Delete a memory from the Tantivy index.
+    /// Delete a memory from the Tantivy index — no commit.
     fn delete_from_fulltext(&self, id: &str) -> AppResult<()> {
-        let mut writer = self.tantivy_writer.lock().unwrap();
+        let writer = self.tantivy_writer.lock().unwrap();
         let term = tantivy::Term::from_field_text(self.tantivy_schema.memory_id, id);
         writer.delete_term(term);
+        // writer.commit() removed
+        Ok(())
+    }
+
+    /// Explicitly commit pending Tantivy changes. Call after batch operations or on a timer.
+    pub fn commit_tantivy(&self) -> AppResult<()> {
+        let mut writer = self.tantivy_writer.lock().unwrap();
         writer.commit()?;
         Ok(())
     }
