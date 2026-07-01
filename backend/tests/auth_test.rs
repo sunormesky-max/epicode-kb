@@ -112,7 +112,7 @@ async fn test_auth_service_register_and_login() {
     let req = CreateLocalUserRequest {
         email: "alice@example.com".to_string(),
         name: "Alice".to_string(),
-        password: "password123".to_string(),
+        password: "Password123!".to_string(),
         global_role: GlobalRole::Editor,
     };
     let user = state.auth_service.register(req).unwrap();
@@ -121,7 +121,7 @@ async fn test_auth_service_register_and_login() {
 
     let login = LoginRequest {
         email: "alice@example.com".to_string(),
-        password: "password123".to_string(),
+        password: "Password123!".to_string(),
     };
     let (tokens, logged_in) = state.auth_service.login(login).unwrap();
     assert_eq!(logged_in.id, user.id);
@@ -139,7 +139,7 @@ async fn test_auth_service_invalid_password_fails() {
     let req = CreateLocalUserRequest {
         email: "bob@example.com".to_string(),
         name: "Bob".to_string(),
-        password: "password123".to_string(),
+        password: "Password123!".to_string(),
         global_role: GlobalRole::Viewer,
     };
     state.auth_service.register(req).unwrap();
@@ -166,7 +166,7 @@ async fn test_auth_register_route_is_public() {
                 .uri("/api/v1/auth/register")
                 .header("content-type", "application/json")
                 .body(common::json_body(
-                    r#"{"email":"public@example.com","name":"Public","password":"password123","global_role":"viewer"}"#,
+                    r#"{"email":"public@example.com","name":"Public","password":"Password123!","global_role":"viewer"}"#,
                 ))
                 .unwrap(),
         )
@@ -188,7 +188,7 @@ async fn test_auth_login_route_is_public() {
     let req = CreateLocalUserRequest {
         email: "login@example.com".to_string(),
         name: "Login".to_string(),
-        password: "password123".to_string(),
+        password: "Password123!".to_string(),
         global_role: GlobalRole::Viewer,
     };
     state.auth_service.register(req).unwrap();
@@ -200,7 +200,7 @@ async fn test_auth_login_route_is_public() {
                 .uri("/api/v1/auth/login")
                 .header("content-type", "application/json")
                 .body(common::json_body(
-                    r#"{"email":"login@example.com","password":"password123"}"#,
+                    r#"{"email":"login@example.com","password":"Password123!"}"#,
                 ))
                 .unwrap(),
         )

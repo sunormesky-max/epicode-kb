@@ -144,8 +144,7 @@ impl ConflictDetector {
         // In-memory pairwise comparison — O(n²/2) but no repeated DB queries or blob conversions
         for i in 0..rows.len() {
             let (id_a, content_a, emb_a) = &rows[i];
-            for j in (i + 1)..rows.len() {
-                let (id_b, content_b, emb_b) = &rows[j];
+            for (id_b, content_b, emb_b) in rows.iter().skip(i + 1) {
 
                 if emb_a.len() != emb_b.len() {
                     continue;

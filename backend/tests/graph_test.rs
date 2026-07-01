@@ -57,7 +57,7 @@ async fn test_graph_returns_nodes_and_conflict_edges() {
         .register(CreateLocalUserRequest {
             email: "graph@example.com".to_string(),
             name: "Graph".to_string(),
-            password: "password123".to_string(),
+            password: "Password123!".to_string(),
             global_role: GlobalRole::Admin,
         })
         .unwrap();
@@ -65,7 +65,7 @@ async fn test_graph_returns_nodes_and_conflict_edges() {
         .auth_service
         .login(LoginRequest {
             email: "graph@example.com".to_string(),
-            password: "password123".to_string(),
+            password: "Password123!".to_string(),
         })
         .unwrap();
 

@@ -28,8 +28,6 @@ pub struct MemoryService {
 }
 
 /// Helper to lock a std::sync::Mutex and map poison to AppError.
-
-
 impl MemoryService {
     /// Create a new MemoryService.
     pub fn new(
