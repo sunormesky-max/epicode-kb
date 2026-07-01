@@ -1,15 +1,10 @@
 import { useState, useEffect } from 'react'
-
-interface ConflictCandidate {
-  memory_a_id: string; memory_b_id: string; content_a: string; content_b: string
-  semantic_distance: number; confidence: number; summary: string
-}
-
-const API = '/api/v1'
+import { listConflicts, resolveConflict } from '../lib/api'
+import type { Conflict, ConflictResolution } from '../lib/types'
 
 export default function ConflictCenter() {
-  const [conflicts, setConflicts] = useState<any[]>([])
-  const [selected, setSelected] = useState<any>(null)
+  const [conflicts, setConflicts] = useState<Conflict[]>([])
+  const [selected, setSelected] = useState<Conflict | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -19,22 +14,22 @@ export default function ConflictCenter() {
   const loadConflicts = async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${API}/conflicts?space_id=sp_default`, { headers: authHeaders() }).then(r => r.json())
-      if (r.code === 0 && r.data) setConflicts(r.data)
-    } catch { /* ignore */ }
+      const data = await listConflicts('sp_default')
+      setConflicts(data)
+    } catch {
+      /* ignore — empty state shown */
+    }
     setLoading(false)
   }
 
-  const resolve = async (id: string, resolution: 'accept_a' | 'accept_b' | 'both_true') => {
+  const resolve = async (id: string, resolution: ConflictResolution) => {
     try {
-      await fetch(`${API}/conflicts/${id}/resolve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ resolution }),
-      })
-      setConflicts(cs => cs.filter(c => c.id !== id))
+      await resolveConflict(id, resolution)
+      setConflicts((cs) => cs.filter((c) => c.id !== id))
       setSelected(null)
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   if (loading) return <div className="text-center py-12 text-gray-400">Loading conflicts...</div>
@@ -54,39 +49,65 @@ export default function ConflictCenter() {
         </div>
       ) : (
         <div className="grid gap-4">
-          {conflicts.map((c: any) => (
-            <div key={c.id} className="bg-white rounded-xl border border-gray-200 p-5 cursor-pointer hover:border-amber-300 transition-colors"
-              onClick={() => setSelected(selected?.id === c.id ? null : c)}>
+          {conflicts.map((c) => (
+            <div
+              key={c.id}
+              className="bg-white rounded-xl border border-gray-200 p-5 cursor-pointer hover:border-amber-300 transition-colors"
+              onClick={() => setSelected(selected?.id === c.id ? null : c)}
+            >
               <div className="flex items-center gap-3 mb-3">
                 <span className="text-lg">⚠️</span>
                 <span className="text-sm font-medium text-amber-700">Knowledge Conflict</span>
-                <span className="text-xs text-gray-400 ml-auto">{new Date(c.created_at * 1000).toLocaleDateString()}</span>
+                <span className="text-xs text-gray-400 ml-auto">
+                  {new Date(c.created_at * 1000).toLocaleDateString()}
+                </span>
               </div>
-              {c.content && <p className="text-sm text-gray-600 line-clamp-2">{c.content.slice(0, 200)}</p>}
+              {c.content && (
+                <p className="text-sm text-gray-600 line-clamp-2">{c.content.slice(0, 200)}</p>
+              )}
 
               {selected?.id === c.id && (
                 <div className="mt-4 pt-4 border-t border-gray-100">
                   <div className="grid md:grid-cols-2 gap-4 mb-4">
                     <div className="p-3 bg-gray-50 rounded-lg">
                       <div className="text-xs text-gray-400 mb-1">Statement A</div>
-                      <p className="text-sm text-gray-700">{c.conflicting_content_a || c.content}</p>
+                      <p className="text-sm text-gray-700">
+                        {c.conflicting_content_a || c.content}
+                      </p>
                     </div>
                     <div className="p-3 bg-gray-50 rounded-lg">
                       <div className="text-xs text-gray-400 mb-1">Statement B</div>
-                      <p className="text-sm text-gray-700">{c.conflicting_content_b || '(see memory)'}</p>
+                      <p className="text-sm text-gray-700">
+                        {c.conflicting_content_b || '(see memory)'}
+                      </p>
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <button onClick={(e) => { e.stopPropagation(); resolve(c.id, 'accept_a') }}
-                      className="px-3 py-1.5 text-xs font-medium bg-green-100 text-green-700 rounded-lg hover:bg-green-200">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        resolve(c.id, 'accept_a')
+                      }}
+                      className="px-3 py-1.5 text-xs font-medium bg-green-100 text-green-700 rounded-lg hover:bg-green-200"
+                    >
                       Accept A
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); resolve(c.id, 'accept_b') }}
-                      className="px-3 py-1.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        resolve(c.id, 'accept_b')
+                      }}
+                      className="px-3 py-1.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
+                    >
                       Accept B
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); resolve(c.id, 'both_true') }}
-                      className="px-3 py-1.5 text-xs font-medium bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        resolve(c.id, 'both_true')
+                      }}
+                      className="px-3 py-1.5 text-xs font-medium bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200"
+                    >
                       Both True
                     </button>
                   </div>
@@ -98,9 +119,4 @@ export default function ConflictCenter() {
       )}
     </div>
   )
-}
-
-function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem('access_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
 }

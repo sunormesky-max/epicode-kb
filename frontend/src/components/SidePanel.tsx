@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-
-interface ContextItem {
-  id: string; content: string; provenance: string; trust_level: number
-}
+import { getEditorContext } from '../lib/api'
+import type { ContextItem } from '../lib/types'
 
 interface SidePanelProps {
   memoryId: string
@@ -17,15 +15,12 @@ export default function SidePanel({ memoryId, editorContent }: SidePanelProps) {
   const fetchContext = useCallback(async () => {
     if (!editorContent || editorContent.length < 20) return
     try {
-      const r = await fetch(
-        `/api/v1/collab/context?memory_id=${memoryId}&cursor=${encodeURIComponent(editorContent.slice(-200))}&space_id=sp_default`,
-        { headers: authHeaders() },
-      ).then((r) => r.json())
-      if (r.code === 0 && r.data) {
-        setRelated((r.data.related || []).slice(0, 5))
-        setWarnings(r.data.warnings || [])
-      }
-    } catch { /* ignore — panel is non-blocking */ }
+      const data = await getEditorContext(memoryId, editorContent.slice(-200), 'sp_default')
+      setRelated((data.related || []).slice(0, 5))
+      setWarnings(data.warnings || [])
+    } catch {
+      /* ignore — panel is non-blocking */
+    }
   }, [memoryId, editorContent])
 
   useEffect(() => {
@@ -95,9 +90,4 @@ export default function SidePanel({ memoryId, editorContent }: SidePanelProps) {
       </div>
     </div>
   )
-}
-
-function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem('access_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
 }

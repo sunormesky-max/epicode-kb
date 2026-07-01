@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { authHeaders } from '../lib/auth'
 
 export default function SpaceSettings() {
   const { id } = useParams<{ id: string }>()
@@ -54,9 +55,4 @@ export default function SpaceSettings() {
       </div>
     </div>
   )
-}
-
-function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem('access_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
 }

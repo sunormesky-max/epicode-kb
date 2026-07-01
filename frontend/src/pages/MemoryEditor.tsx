@@ -7,6 +7,7 @@ import CollaborationCursor from '@tiptap/extension-collaboration-cursor'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 import SidePanel from '../components/SidePanel'
+import { authHeaders, currentUserName, currentUserId, getToken } from '../lib/auth'
 
 const CURSOR_COLORS = ['#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabed4', '#ffe119', '#4363d8']
 
@@ -50,7 +51,7 @@ export default function MemoryEditor() {
           doc.getText('content').insert(0, content)
         }
         const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws'
-        const token = localStorage.getItem('access_token') || ''
+        const token = getToken() || ''
         // y-websocket connects to `${wsUrl}/${roomname}`. We point wsUrl at the
         // collab base, use the memory id as roomname, and pass the JWT via params.
         provider = new WebsocketProvider(
@@ -60,8 +61,8 @@ export default function MemoryEditor() {
           { params: { token }, disableBc: true },
         )
         const user = {
-          name: localStorage.getItem('user_name') || 'Anonymous',
-          color: pickColor(localStorage.getItem('user_id') || id),
+          name: currentUserName(),
+          color: pickColor(currentUserId() || id),
         }
         provider.awareness.setLocalStateField('user', user)
         setCollab({ ydoc: doc, provider })
@@ -89,8 +90,8 @@ export default function MemoryEditor() {
               CollaborationCursor.configure({
                 provider: collab.provider,
                 user: {
-                  name: localStorage.getItem('user_name') || 'Anonymous',
-                  color: pickColor(localStorage.getItem('user_id') || id || 'anon'),
+                  name: currentUserName(),
+                  color: pickColor(currentUserId() || id || 'anon'),
                 },
               }),
             ]
@@ -154,9 +155,4 @@ export default function MemoryEditor() {
       {id && <SidePanel memoryId={id} editorContent={editor.getText()} />}
     </div>
   )
-}
-
-function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem('access_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
 }

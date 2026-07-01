@@ -10,28 +10,8 @@ import ReactFlow, {
   Position,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
-
-interface GraphNodeData {
-  id: string
-  label: string
-  provenance: string
-  trust_level: number
-  [key: string]: unknown
-}
-
-interface GraphEdgeData {
-  source: string
-  target: string
-  type: 'conflict' | 'similar'
-  confidence?: number
-}
-
-interface GraphData {
-  nodes: GraphNodeData[]
-  edges: GraphEdgeData[]
-}
-
-const API = '/api/v1'
+import { getGraph } from '../lib/api'
+import type { GraphData, GraphNode as GraphNodeData } from '../lib/types'
 
 /** Custom node rendering memory title + provenance badge. */
 function MemoryNode({ data }: { data: GraphNodeData }) {
@@ -70,14 +50,10 @@ export default function Graph() {
     setLoading(true)
     setError(null)
     try {
-      const r = await fetch(`${API}/graph?space_id=sp_default`, { headers: authHeaders() }).then((r) => r.json())
-      if (r.code === 0 && r.data) {
-        setData(r.data)
-      } else {
-        setError(r.message || 'failed to load graph')
-      }
-    } catch {
-      setError('network error')
+      const data = await getGraph('sp_default')
+      setData(data)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'network error')
     }
     setLoading(false)
   }, [])
@@ -219,9 +195,4 @@ export default function Graph() {
       <p className="text-xs text-gray-400 mt-2">Tip: click a node to highlight its connections.</p>
     </div>
   )
-}
-
-function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem('access_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
 }

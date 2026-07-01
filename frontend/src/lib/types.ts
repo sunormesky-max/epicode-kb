@@ -89,3 +89,60 @@ export interface RecallRequest {
   space_id: string
   limit?: number
 }
+
+// ============================================================
+// Conflict center (P3)
+// ============================================================
+
+export type ConflictResolution = 'accept_a' | 'accept_b' | 'both_true'
+
+export interface Conflict {
+  id: string
+  content: string
+  conflicting_id_a?: string
+  conflicting_id_b?: string
+  conflicting_content_a?: string
+  conflicting_content_b?: string
+  confidence?: number
+  created_at: number
+}
+
+// ============================================================
+// Knowledge graph (P3-4)
+// ============================================================
+
+export interface GraphNode {
+  id: string
+  label: string
+  provenance: Provenance
+  trust_level: number
+}
+
+export interface GraphEdge {
+  source: string
+  target: string
+  type: 'conflict' | 'similar'
+  confidence?: number
+}
+
+export interface GraphData {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
+// ============================================================
+// Editor context (P5-2 real-time conflict detection)
+// ============================================================
+
+export interface ContextItem {
+  id: string
+  content: string
+  provenance: Provenance
+  trust_level: number
+  semantic_distance: number
+}
+
+export interface EditorContext {
+  related: ContextItem[]
+  warnings: string[]
+}

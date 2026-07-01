@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { authHeaders } from '../lib/auth'
 
 export default function AgentIntegration() {
   const [spaceId, setSpaceId] = useState('')
@@ -59,9 +60,4 @@ export default function AgentIntegration() {
       </div>
     </div>
   )
-}
-
-function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem('access_token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
 }

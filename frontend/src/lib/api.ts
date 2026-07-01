@@ -1,8 +1,13 @@
 // HTTP API wrapper — handles unified {code, data, message} response format
 
+import { authHeaders } from './auth'
 import type {
   ApiResponse,
+  Conflict,
+  ConflictResolution,
   CreateMemoryRequest,
+  EditorContext,
+  GraphData,
   ListMemoriesResponse,
   Memory,
   RememberResponse,
@@ -28,9 +33,12 @@ async function request<T>(
 ): Promise<T> {
   const url = `${API_BASE}${path}`
 
+  // Always inject the Authorization header (single source of truth in lib/auth).
+  const headers: Record<string, string> = { ...authHeaders(), ...(options.headers as Record<string, string> | undefined) }
+
   let response: Response
   try {
-    response = await fetch(url, options)
+    response = await fetch(url, { ...options, headers })
   } catch (err) {
     throw new ApiError(-1, `Network error: ${err instanceof Error ? err.message : 'unknown'}`)
   }
@@ -149,6 +157,7 @@ export async function upload(
 
   const response = await fetch(`${API_BASE}/upload`, {
     method: 'POST',
+    headers: authHeaders(),
     body: formData,
   })
 
@@ -176,4 +185,48 @@ export async function systemHealth(): Promise<{ status: string; version: string 
 
 export async function systemVersion(): Promise<{ version: string; name: string }> {
   return request('/system/version')
+}
+
+// ============================================================
+// Conflict center API (P3)
+// ============================================================
+
+export async function listConflicts(spaceId = 'sp_default'): Promise<Conflict[]> {
+  return request<Conflict[]>(`/conflicts?space_id=${encodeURIComponent(spaceId)}`)
+}
+
+export async function resolveConflict(
+  id: string,
+  resolution: ConflictResolution,
+): Promise<{ id: string; resolution: string; status: string }> {
+  return request(`/conflicts/${id}/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resolution }),
+  })
+}
+
+// ============================================================
+// Knowledge graph API (P3-4)
+// ============================================================
+
+export async function getGraph(spaceId = 'sp_default'): Promise<GraphData> {
+  return request<GraphData>(`/graph?space_id=${encodeURIComponent(spaceId)}`)
+}
+
+// ============================================================
+// Editor context API (P5-2)
+// ============================================================
+
+export async function getEditorContext(
+  memoryId: string,
+  cursor: string,
+  spaceId = 'sp_default',
+): Promise<EditorContext> {
+  const query = new URLSearchParams({
+    memory_id: memoryId,
+    cursor,
+    space_id: spaceId,
+  })
+  return request<EditorContext>(`/collab/context?${query}`)
 }
